@@ -23,6 +23,7 @@ $GLOBALS['wp_version'] = in_array( $scenario, array( 'old-wordpress', 'unauthori
 function __( $text, $domain ) { return $text; }
 function esc_html( $text ) { return htmlspecialchars( $text, ENT_QUOTES, 'UTF-8' ); }
 function esc_html__( $text, $domain ) { return esc_html( $text ); }
+function is_admin() { return false; }
 function is_multisite() { return in_array( $GLOBALS['scenario'], array( 'network', 'site-only' ), true ); }
 function current_user_can( $capability ) { return 'unauthorized' !== $GLOBALS['scenario']; }
 function plugin_basename( $file ) { return basename( dirname( $file ) ) . '/' . basename( $file ); }
