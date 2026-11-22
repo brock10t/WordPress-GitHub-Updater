@@ -10,7 +10,11 @@ use TenT\GitHubUpdater\Registry\Registration;
 use TenT\GitHubUpdater\Registry\Registry;
 
 define( 'ABSPATH', '/unused/' );
-foreach ( array( 'github/class-repository.php', 'registry/class-registration.php', 'registry/class-option-storage.php', 'registry/class-installed-plugins.php', 'registry/class-update-uri.php', 'registry/class-registry.php' ) as $file ) {
+define( 'DB_NAME', 'registry-tests' );
+require __DIR__ . '/support/class-lock-database-double.php';
+$wpdb = new Lock_Database_Double();
+$cache_deletes = array();
+foreach ( array( 'github/class-repository.php', 'registry/class-registration.php', 'registry/class-option-storage.php', 'registry/class-installed-plugins.php', 'registry/class-update-uri.php', 'registry/class-registry-lock.php', 'registry/class-registry.php' ) as $file ) {
 	require dirname( __DIR__ ) . '/includes/' . $file;
 }
 class WP_Error {
@@ -19,6 +23,8 @@ class WP_Error {
 }
 function __( $text, $domain ) { return $text; }
 function is_multisite() { return $GLOBALS['multisite']; }
+function get_current_network_id() { return $GLOBALS['network']; }
+function wp_cache_delete( $key, $group ) { $GLOBALS['cache_deletes'][] = array( $key, $group ); }
 function current_user_can( $capability ) { return $GLOBALS['permissions'][ $capability ] ?? false; }
 function get_plugins() { return $GLOBALS['plugins']; }
 function sanitize_url( $url ) { return trim( $url, ' ' ); }
@@ -152,6 +158,47 @@ foreach ( array( false, true ) as $multisite ) {
 	check_registry( true === $registry->remove( 'fixture/main.php' ), 'Remove a registration for a still-installed plugin' );
 	check_registry( $before_plugins === $plugins, 'Removal does not change installed plugins or headers' );
 	check_registry( $registry->get( 'pending/main.php' ) instanceof Registration, 'Removal preserves other registrations' );
+	// Cross-repository and directory conflicts are checked before any write.
+	check_registry( true === $registry->remove( 'pending/main.php' ), 'Clear prior fixture' );
+	$plugins['fixture/main.php']['UpdateURI'] = '';
+	check_registry( $registry->register( 'fixture/main.php', 'https://github.com/owner/repository' ) instanceof Registration, 'Register base conflict fixture' );
+	$plugins['other/main.php']['UpdateURI'] = '';
+	$before = $writes;
+	expect_registry_error( $registry->register( 'other/main.php', 'HTTPS://GITHUB.COM/OWNER/Repository.git/' ), 'github_updater_repository_already_registered' );
+	check_registry( $before === $writes, 'Equivalent repository alias cannot write' );
+	unset( $plugins['fixture/main.php'] );
+	$plugins['Fixture/Main.php'] = array( 'Name' => 'Case Alias', 'UpdateURI' => '' );
+	expect_registry_error( $registry->register( 'Fixture/Main.php', 'https://github.com/owner/alias' ), 'github_updater_plugin_identity_conflict' );
+	unset( $plugins['Fixture/Main.php'] );
+	$plugins['fixture/second.php'] = array( 'Name' => 'Other Entry', 'UpdateURI' => '' );
+	expect_registry_error( $registry->register( 'fixture/second.php', 'https://github.com/owner/second' ), 'github_updater_plugin_directory_conflict' );
+	unset( $plugins['fixture/second.php'] );
+	$plugins['fixture/main.php'] = array( 'Name' => 'Fixture', 'UpdateURI' => 'https://github.com/owner/repository' );
+	$plugins['fixture/second.php'] = array( 'Name' => 'Other Entry', 'UpdateURI' => '' );
+	expect_registry_error( $registry->check_update_uri( 'fixture/main.php' ), 'github_updater_plugin_directory_conflict' );
+	unset( $plugins['fixture/second.php'] );
+	$plugins['shared/one.php'] = array( 'Name' => 'One', 'UpdateURI' => '' );
+	$plugins['shared/two.php'] = array( 'Name' => 'Two', 'UpdateURI' => '' );
+	expect_registry_error( $registry->register( 'shared/one.php', 'https://github.com/owner/shared' ), 'github_updater_plugin_directory_conflict' );
+
+	// Readiness must also reject collisions already present in stored data.
+	$alias = new Registration( 'other/main.php', 'OWNER', 'Repository' );
+	$base = $registry->get( 'fixture/main.php' );
+	check_registry( true === (new Option_Storage())->save(array($base->plugin_basename => $base, $alias->plugin_basename => $alias)), 'Seed legacy ambiguous records' );
+	expect_registry_error( $registry->check_update_uri('fixture/main.php'), 'github_updater_repository_already_registered' );
+	check_registry( true === $registry->remove('other/main.php'), 'Ambiguous records remain removable' );
+	check_registry( true === $registry->check_update_uri('fixture/main.php'), 'Readiness recovers after explicit conflict removal' );
+
+	// A denied lock cannot write, and reentrant option hooks cannot mutate again.
+	$wpdb->acquire = '0';
+	$before = $writes;
+	expect_registry_error($registry->register('other/main.php', 'https://github.com/owner/other'), 'github_updater_registry_busy');
+	expect_registry_error($registry->remove('fixture/main.php'), 'github_updater_registry_busy');
+	check_registry($before === $writes, 'Contended operations do not write');
+	$wpdb->acquire = null;
+	expect_registry_error($registry->remove('fixture/main.php'), 'github_updater_registry_lock_unavailable');
+	$wpdb->acquire = '1';
+	check_registry(!$wpdb->locked, 'Registry operations release locks on all tested return paths');
 	$key = Option_Storage::OPTION_NAME;
 	if ( $multisite ) {
 		$networks[ $network ][ $key ] = array( 'schema_version' => 2, 'registrations' => array() );

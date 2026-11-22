@@ -1,6 +1,6 @@
 # 10T GitHub Updater
 
-A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. Currently implements the foundation, registration data model, option storage, installed-plugin discovery, GitHub URL validation and Update URI diagnostics; internal registration operations; administration screens, complete conflict controls, installation and updates will arrive in later tasks.
+A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. Currently implements the foundation, registration data model, option storage, installed-plugin discovery, GitHub URL validation and Update URI diagnostics; internal registration operations with conflict controls and coordinated writes; administration screens, installation and updates will arrive in later tasks.
 
 Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation is required. There are no mandatory third-party dependencies and production does not require Composer.
 
@@ -43,7 +43,7 @@ V1 supports directory-based plugins only; standalone PHP plugins directly under 
 
 `load()` returns basename-keyed `Registration` objects or a `WP_Error`; an absent option returns an empty array without creating storage. `save()` accepts a complete basename-keyed snapshot of `Registration` objects and returns `true` or a `WP_Error`. It refuses to overwrite a malformed registry or any unsupported schema version, including future versions. Invalid records fail the whole read rather than disappearing from the next save. A failed update is distinguished from an unchanged update by reading back the exact stored value. No automatic repair or migration occurs.
 
-Storage does not enforce user capabilities, nonces, repository validity or conflicting registrations; future service/action handlers must do that before calling it. Complete-snapshot saves are not atomic read-modify-write operations: concurrent writers can overwrite each other's changes. Resolve coordination before exposing registration mutations through administrative actions. No per-request writes or activation-time storage initialization are introduced.
+Raw storage does not enforce user capabilities, nonces, repository validity or conflicting registrations. Use the registry service for mutations: it performs validation and holds the write lock across the complete read/validate/save operation. Calling storage directly bypasses those safeguards; raw snapshot saves alone are not atomic. No per-request writes or activation-time storage initialization are introduced.
 
 Installed versions, Update URI diagnostics, release metadata, activation state and errors are live or cached information; they are not duplicated in the registration. The built-in self-update registration will remain separate. Repository URL normalization and registration services must validate external input before constructing records and translate validation exceptions into actionable WordPress errors.
 
@@ -51,7 +51,7 @@ Installed versions, Update URI diagnostics, release metadata, activation state a
 
 `Registry\Installed_Plugins::all()` reads WordPress's `get_plugins()` list and preserves its canonical basename keys and raw headers. It includes active, inactive and standalone ordinary plugins; must-use plugins and drop-ins are outside this list. The WordPress administration helper is loaded on demand when necessary. Discovery uses WordPress's own plugin cache and adds no independent cache.
 
-`get($basename)` resolves only an exact installed key and applies `Registration::is_supported_basename()` before returning headers. Missing or altered keys return `github_updater_plugin_not_installed`; installed standalone files or unsupported paths return `github_updater_unsupported_plugin_basename`. Display names, directory names alone and repository names cannot substitute for basenames. Distinct main files in the same directory remain distinct entries; the later registry conflict rules must decide whether they may be managed together.
+`get($basename)` resolves only an exact installed key and applies `Registration::is_supported_basename()` before returning headers. Missing or altered keys return `github_updater_plugin_not_installed`; installed standalone files or unsupported paths return `github_updater_unsupported_plugin_basename`. Display names, directory names alone and repository names cannot substitute for basenames. Distinct main files in the same directory remain distinct entries; v1 registry conflict rules reject managing shared directories.
 
 The directory-only format check is shared with the registration model; it does not prove installation by itself. Header values are untrusted text and must be escaped when displayed. Discovery does not validate Update URI, register plugins, read GitHub, inspect activation eligibility or write storage. Future administration actions must enforce capabilities and nonces and resolve the selected basename again before acting. Core's plugin cache must be invalidated appropriately after future install/update operations.
 
@@ -83,11 +83,15 @@ Diagnostics explain how to involve the plugin author and provide the expected re
 - `check_update_uri($basename)` resolves current installed headers and recomputes compatibility. A returned registration alone does not make a plugin eligible for updates.
 - `remove($basename)` removes only that exact registry record. It never uninstalls, deactivates or edits plugin files; missing installed files do not prevent removal of a stale registration.
 
-Registration never silently replaces an existing basename, and manual registration of the updater itself is reserved for built-in self-update support. Full repository/directory collision checks remain for the next task. Missing-header readiness is computed from current installed headers rather than a persisted flag; a header correction needs no registry rewrite. Until native update integration exists, no records produce update offers. Future update handlers must always check current compatibility before providing metadata or packages.
+Registration never silently replaces an existing basename, and manual registration of the updater itself is reserved for built-in self-update support. V1 also rejects normalized repository reuse, case-only basename aliases, directories already assigned to another main file, and directories containing multiple installed plugin entry points (even if the other plugin is unregistered). Repository reuse across a monorepo is outside the v1 policy. Case-folded collision checks protect portable directory identity while stored basenames stay unchanged. Readiness checks apply these rules to already-stored records as well; conflicting records remain inspectable and removable. Missing-header readiness is computed from current installed headers rather than a persisted flag; a header correction needs no registry rewrite. Until native update integration exists, no records produce update offers. Future update handlers must always check current compatibility before providing metadata or packages.
 
 Mutation methods require `update_plugins`, plus `manage_network_plugins` on Multisite. WordPress's capability mapping therefore also respects file-modification restrictions and the network administrator boundary. Future HTTP handlers must additionally restrict management to the correct admin context and verify nonces. Read operations remain available to internal update checks without a logged-in user.
 
-These operations currently save complete snapshots. Writer coordination and complete duplicate/conflict rules must be in place before administrative mutations are exposed; no concurrency safety is claimed yet.
+Registry mutations use `Registry\Registry_Lock` to acquire a zero-wait MySQL/MariaDB advisory lock before reading current records. Its hashed name includes the database, option table, registry key and network ID; all sites in one network share a lock. Successful acquisition invalidates the relevant option and missing-option caches before validation/save. Nested mutations are rejected, and `finally` releases locks after successful returns, errors or exceptions. Busy/unavailable locks return errors without writing; release failure reports that the change may already have been saved and instructs a refresh.
+
+This is cooperative locking for a stable connection to one primary database, using `$wpdb` only for prepared locking queries and native options APIs for persisted data. Raw storage writes or other code that ignores the lock are outside its protection. Database proxies/routers, reconnection/failover during a mutation, custom database backends and unusual persistent object caches require separate integration verification; the lock does not promise distributed or transactional recovery. Hosts disabling advisory locking cannot mutate the registry. Read-only diagnostics still work. The implementation follows [MySQL locking functions](https://dev.mysql.com/doc/refman/8.0/en/locking-functions.html) and [MariaDB GET_LOCK](https://mariadb.com/docs/server/reference/sql-functions/secondary-functions/miscellaneous-functions/get_lock).
+
+No administrative mutation endpoints exist yet. Their capability, nonce and Network Admin checks remain for the administration task.
 
 ## Development checks
 
@@ -104,6 +108,7 @@ php tests/installed-plugins.php
 php tests/repository.php
 php tests/update-uri.php
 php tests/registry.php
+php tests/registry-lock.php
 php tests/unsupported-environment.php wordpress
 git diff --check
 ```

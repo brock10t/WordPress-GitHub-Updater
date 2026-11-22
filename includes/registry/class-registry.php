@@ -25,10 +25,12 @@ final class Registry {
 	 *
 	 * @param Option_Storage    $storage   Registry persistence.
 	 * @param Installed_Plugins $installed Installed-plugin discovery.
+	 * @param Registry_Lock     $lock      Mutation coordination.
 	 */
 	public function __construct(
 		private readonly Option_Storage $storage = new Option_Storage(),
-		private readonly Installed_Plugins $installed = new Installed_Plugins()
+		private readonly Installed_Plugins $installed = new Installed_Plugins(),
+		private readonly Registry_Lock $lock = new Registry_Lock()
 	) {}
 
 	/**
@@ -70,8 +72,19 @@ final class Registry {
 		if ( $permission instanceof WP_Error ) {
 			return $permission;
 		}
+		return $this->lock->run( fn() => $this->register_locked( $basename, $repository_url ) );
+	}
+
+	/**
+	 * Validate against the latest snapshot while holding the mutation lock.
+	 *
+	 * @param string $basename       Exact installed basename.
+	 * @param string $repository_url Selected GitHub URL.
+	 * @return Registration|WP_Error
+	 */
+	private function register_locked( string $basename, string $repository_url ): Registration|WP_Error {
 		$updater = plugin_basename( dirname( __DIR__, 2 ) . '/wordpress-github-updater.php' );
-		if ( $basename === $updater ) {
+		if ( strtolower( dirname( $basename ) ) === strtolower( dirname( $updater ) ) ) {
 			return new WP_Error( 'github_updater_self_registration_reserved', __( 'GitHub Updater uses separate built-in self-update registration when its repository is configured.', 'wordpress-github-updater' ) );
 		}
 		$headers = $this->installed->get( $basename );
@@ -94,7 +107,15 @@ final class Registry {
 			return new WP_Error( 'github_updater_plugin_already_registered', __( 'This plugin is already registered. Remove its registration explicitly before associating it again.', 'wordpress-github-updater' ) );
 		}
 
-		$record               = new Registration( $basename, $repository->owner, $repository->name );
+		$record   = new Registration( $basename, $repository->owner, $repository->name );
+		$conflict = $this->find_conflict( $record, $records );
+		if ( $conflict instanceof WP_Error ) {
+			return $conflict;
+		}
+		$conflict = $this->check_installed_directory( $record );
+		if ( $conflict instanceof WP_Error ) {
+			return $conflict;
+		}
 		$records[ $basename ] = $record;
 		$saved                = $this->storage->save( $records );
 
@@ -121,6 +142,19 @@ final class Registry {
 			return $repository;
 		}
 
+		$records = $this->all();
+		if ( $records instanceof WP_Error ) {
+			return $records;
+		}
+		$conflict = $this->find_conflict( $record, $records, true );
+		if ( $conflict instanceof WP_Error ) {
+			return $conflict;
+		}
+		$conflict = $this->check_installed_directory( $record );
+		if ( $conflict instanceof WP_Error ) {
+			return $conflict;
+		}
+
 		return Update_URI::check( $headers, $repository );
 	}
 
@@ -135,16 +169,78 @@ final class Registry {
 		if ( $permission instanceof WP_Error ) {
 			return $permission;
 		}
-		$records = $this->all();
-		if ( $records instanceof WP_Error ) {
-			return $records;
+		return $this->lock->run(
+			function () use ( $basename ) {
+				$records = $this->all();
+				if ( $records instanceof WP_Error ) {
+					return $records;
+				}
+				if ( ! isset( $records[ $basename ] ) ) {
+					return $this->not_registered();
+				}
+
+				unset( $records[ $basename ] );
+				return $this->storage->save( $records );
+			}
+		);
+	}
+
+	/**
+	 * Enforce one plugin identity and directory per normalized repository.
+	 *
+	 * @param Registration                $candidate Candidate or existing record.
+	 * @param array<string, Registration> $records   Current persisted snapshot.
+	 * @param bool                        $skip_self Ignore exact self for readiness.
+	 * @return true|WP_Error
+	 */
+	private function find_conflict( Registration $candidate, array $records, bool $skip_self = false ): true|WP_Error {
+		$repository = Repository::from_url( $candidate->repository_url );
+		if ( $repository instanceof WP_Error ) {
+			return $repository;
 		}
-		if ( ! isset( $records[ $basename ] ) ) {
-			return $this->not_registered();
+		foreach ( $records as $existing ) {
+			if ( $skip_self && $existing->plugin_basename === $candidate->plugin_basename ) {
+				continue;
+			}
+			if ( strtolower( $existing->plugin_basename ) === strtolower( $candidate->plugin_basename ) ) {
+				return new WP_Error( 'github_updater_plugin_identity_conflict', __( 'A registration already uses this plugin basename with different letter case. Remove the conflicting registration explicitly.', 'wordpress-github-updater' ) );
+			}
+			if ( strtolower( $existing->plugin_slug ) === strtolower( $candidate->plugin_slug ) ) {
+				return $this->directory_conflict();
+			}
+			$existing_repository = Repository::from_url( $existing->repository_url );
+			if ( $existing_repository instanceof WP_Error ) {
+				return $existing_repository;
+			}
+			if ( $existing_repository->url === $repository->url ) {
+				return new WP_Error( 'github_updater_repository_already_registered', __( 'This GitHub repository is already assigned to another plugin. Version 1 supports one managed plugin per repository.', 'wordpress-github-updater' ) );
+			}
 		}
 
-		unset( $records[ $basename ] );
-		return $this->storage->save( $records );
+		return true;
+	}
+
+	/**
+	 * Do not replace a directory containing another ordinary plugin entry point.
+	 *
+	 * @param Registration $candidate Managed directory identity.
+	 * @return true|WP_Error
+	 */
+	private function check_installed_directory( Registration $candidate ): true|WP_Error {
+		foreach ( $this->installed->all() as $basename => $headers ) {
+			if ( $basename !== $candidate->plugin_basename && strtolower( dirname( $basename ) ) === strtolower( $candidate->plugin_slug ) ) {
+				return $this->directory_conflict();
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * @return WP_Error
+	 */
+	private function directory_conflict(): WP_Error {
+		return new WP_Error( 'github_updater_plugin_directory_conflict', __( 'This directory is shared by multiple plugin identities. Version 1 cannot manage it safely; no registration was changed.', 'wordpress-github-updater' ) );
 	}
 
 	/**
