@@ -1,6 +1,6 @@
 # 10T GitHub Updater
 
-A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. Currently implements the foundation, registration data model and option storage; registration workflows, administration screens, installation and updates will arrive in later tasks.
+A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. Currently implements the foundation, registration data model, option storage and installed-plugin discovery; registration workflows, administration screens, installation and updates will arrive in later tasks.
 
 Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation is required. There are no mandatory third-party dependencies and production does not require Composer.
 
@@ -47,6 +47,14 @@ Storage does not enforce user capabilities, nonces, repository validity or confl
 
 Installed versions, Update URI diagnostics, release metadata, activation state and errors are live or cached information; they are not duplicated in the registration. The built-in self-update registration will remain separate. Repository URL normalization and registration services must validate external input before constructing records and translate validation exceptions into actionable WordPress errors.
 
+## Installed-plugin discovery
+
+`Registry\Installed_Plugins::all()` reads WordPress's `get_plugins()` list and preserves its canonical basename keys and raw headers. It includes active, inactive and standalone ordinary plugins; must-use plugins and drop-ins are outside this list. The WordPress administration helper is loaded on demand when necessary. Discovery uses WordPress's own plugin cache and adds no independent cache.
+
+`get($basename)` resolves only an exact installed key and applies `Registration::is_supported_basename()` before returning headers. Missing or altered keys return `github_updater_plugin_not_installed`; installed standalone files or unsupported paths return `github_updater_unsupported_plugin_basename`. Display names, directory names alone and repository names cannot substitute for basenames. Distinct main files in the same directory remain distinct entries; the later registry conflict rules must decide whether they may be managed together.
+
+The directory-only format check is shared with the registration model; it does not prove installation by itself. Header values are untrusted text and must be escaped when displayed. Discovery does not validate Update URI, register plugins, read GitHub, inspect activation eligibility or write storage. Future administration actions must enforce capabilities and nonces and resolve the selected basename again before acting. Core's plugin cache must be invalidated appropriately after future install/update operations.
+
 ## Development checks
 
 Run from the plugin directory:
@@ -58,6 +66,7 @@ php -l includes/class-plugin.php
 php tests/foundation.php
 php tests/registration.php
 php tests/option-storage.php
+php tests/installed-plugins.php
 php tests/unsupported-environment.php wordpress
 git diff --check
 ```

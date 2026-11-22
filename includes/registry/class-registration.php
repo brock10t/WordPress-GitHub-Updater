@@ -42,16 +42,10 @@ final readonly class Registration {
 		public string $repository_owner,
 		public string $repository_name
 	) {
-		$parts = explode( '/', $plugin_basename );
-		if (
-			2 !== count( $parts )
-			|| ! self::is_path_segment( $parts[0] )
-			|| ! self::is_path_segment( $parts[1] )
-			|| ! str_ends_with( $parts[1], '.php' )
-			|| '.php' === $parts[1]
-		) {
+		if ( ! self::is_supported_basename( $plugin_basename ) ) {
 			throw new InvalidArgumentException( 'A registration requires a directory-based plugin basename such as plugin-slug/main.php.' );
 		}
+		$parts = explode( '/', $plugin_basename );
 
 		foreach ( array( $repository_owner, $repository_name ) as $component ) {
 			if ( ! preg_match( '/\A[A-Za-z0-9_.-]+\z/', $component ) || in_array( $component, array( '.', '..' ), true ) ) {
@@ -107,6 +101,21 @@ final readonly class Registration {
 		}
 
 		return $registration;
+	}
+
+	/**
+	 * Check the v1 directory-based identity format, not installation existence.
+	 *
+	 * @param string $basename Canonical installed basename to inspect.
+	 * @return bool
+	 */
+	public static function is_supported_basename( string $basename ): bool {
+		$parts = explode( '/', $basename );
+		return 2 === count( $parts )
+			&& self::is_path_segment( $parts[0] )
+			&& self::is_path_segment( $parts[1] )
+			&& str_ends_with( $parts[1], '.php' )
+			&& '.php' !== $parts[1];
 	}
 
 	/**
