@@ -1,6 +1,6 @@
 # 10T GitHub Updater
 
-A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. Currently implements the foundation, registration data model, option storage, installed-plugin discovery and GitHub URL validation; registration workflows, administration screens, installation and updates will arrive in later tasks.
+A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. Currently implements the foundation, registration data model, option storage, installed-plugin discovery, GitHub URL validation and Update URI diagnostics; registration workflows, administration screens, installation and updates will arrive in later tasks.
 
 Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation is required. There are no mandatory third-party dependencies and production does not require Composer.
 
@@ -65,6 +65,14 @@ V1 accepts ordinary public account/organization owner syntax: 1–39 ASCII alpha
 
 Future registration and Update URI handling should reuse this parser, then construct `Registration` using its normalized owner/name and the separately discovered installed basename. Do not infer a plugin directory from the repository name. The parser is explicitly loaded by consumers and is not yet wired to administrative actions. It is not the allowlist or redirect validator for future asset downloads.
 
+## Update URI compatibility
+
+`Registry\Update_URI::check($plugin_data, $repository)` compares raw installed-plugin headers with a validated `GitHub\Repository`. It returns `true` for compatible headers or a `WP_Error` distinguishing a missing header, `Update URI: false`, an invalid/unsupported URL, another GitHub repository, or an incompatible hostname for native hook routing. Each error includes the canonical correction in `get_error_data()['expected_update_uri']`; escape this value when displaying it.
+
+Repository identity comparisons reuse URL normalization, including owner/name case and optional `.git`/trailing slash. There is an additional routing requirement: the header hostname must be literal lowercase `github.com`. WordPress derives the dynamic hook directly from `wp_parse_url(sanitize_url($header), PHP_URL_HOST)` and preserves hostname case. Thus `https://GITHUB.COM/owner/repo` identifies the same repository but does not select the planned `update_plugins_github.com` hook. This behavior was checked against [WordPress 6.6 update source](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-includes/update.php) and the native helpers on the local installation.
+
+Diagnostics explain how to involve the plugin author and provide the expected repository-root header. They do not modify files, store a status, authorize a registration, confirm repository visibility or make an update installable. Future registration and update handlers must obtain headers for the exact selected basename through installed-plugin discovery, then check compatibility again as appropriate. Allowing a pending registration versus rejecting incompatible headers remains a separate registration-policy decision. The updater's provisional `Update URI: false` stays unchanged until its actual self-update repository is confirmed.
+
 ## Development checks
 
 Run from the plugin directory:
@@ -78,6 +86,7 @@ php tests/registration.php
 php tests/option-storage.php
 php tests/installed-plugins.php
 php tests/repository.php
+php tests/update-uri.php
 php tests/unsupported-environment.php wordpress
 git diff --check
 ```
