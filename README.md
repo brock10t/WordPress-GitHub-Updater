@@ -23,10 +23,20 @@ php -l wordpress-github-updater.php
 php -l includes/class-environment.php
 php -l includes/class-plugin.php
 php tests/foundation.php
+php tests/unsupported-environment.php wordpress
 git diff --check
 ```
 
 The foundation checks use WordPress function doubles and separate PHP processes to exercise loading, activation guards and notices. They do not establish real WordPress activation or old-PHP runtime compatibility. Use WordPress Coding Standards when development tooling is available; no standards runner is bundled yet.
+
+The unsupported-environment checks fail on PHP warnings and verify early return, activation rejection, escaped diagnostics and permission checks in both admin contexts. The `wordpress` scenario injects WordPress 6.5.9. Run `tests/unsupported-environment.php php` and `tests/unsupported-environment.php both` with a real PHP interpreter below 8.2 to exercise the PHP gate; these scenarios refuse to run on supported PHP. For example:
+
+```sh
+php8.1 tests/unsupported-environment.php php
+php8.1 tests/unsupported-environment.php both
+```
+
+These isolated checks do not boot an older WordPress installation. Never downgrade the active site's PHP or WordPress files to perform compatibility checks.
 
 In disposable WordPress environments, verify:
 
