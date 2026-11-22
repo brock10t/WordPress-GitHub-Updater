@@ -1,6 +1,6 @@
 # 10T GitHub Updater
 
-A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. Currently implements the foundation and registration data model; registry storage, administration screens, installation and updates will arrive in later tasks.
+A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. Currently implements the foundation, registration data model and option storage; registration workflows, administration screens, installation and updates will arrive in later tasks.
 
 Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation is required. There are no mandatory third-party dependencies and production does not require Composer.
 
@@ -18,7 +18,7 @@ Classes use the `TenT\GitHubUpdater` namespace and WordPress-style `class-*.php`
 
 `includes/registry/class-registration.php` defines an immutable `TenT\GitHubUpdater\Registry\Registration`. The installed plugin basename is its identity; the GitHub repository name can differ from the plugin directory. Construct records from an already-canonical basename and repository owner/name. The model provides structural checks, array serialization and consistency checks when restoring arrays. It does not discover installed plugins, validate repository URLs, contact GitHub, or establish that a repository is public or trusted.
 
-The planned option value uses a versioned envelope, with registrations keyed by their exact installed basenames:
+The option value uses a versioned envelope, with registrations keyed by their exact installed basenames:
 
 ```php
 array(
@@ -39,7 +39,11 @@ array(
 
 V1 supports directory-based plugins only; standalone PHP plugins directly under `wp-content/plugins` are rejected without relocation. Records preserve literal installed basename case and reject nested main-file paths, traversal components, backslashes, drive separators, control characters and percent-encoded paths. Repository component checks are structural only; full GitHub URL and owner/name rules belong to the URL-validation task.
 
-The option-storage task will implement this envelope in ordinary/network options and check that each array key matches its record's basename. No option is read or written yet. Store plain arrays, not serialized PHP objects. Derive the slug/main file from the basename, the ZIP name from the slug, and the repository URL from its owner/name. Restoring a record must reject inconsistent derived fields rather than silently repairing its identity.
+`Registry\Option_Storage` implements this envelope under `wordpress_github_updater_registry`, using `get_option`/`update_option` on single-site and `get_site_option`/`update_site_option` on Multisite (one shared registry per current network). Single-site storage disables autoload. It checks each array key against its record's basename. The adapter is not yet wired into operational plugin hooks, so initialization creates no registry option. Store plain arrays, not serialized PHP objects. Derive the slug/main file from the basename, the ZIP name from the slug, and the repository URL from its owner/name. Restoring a record must reject inconsistent derived fields rather than silently repairing its identity.
+
+`load()` returns basename-keyed `Registration` objects or a `WP_Error`; an absent option returns an empty array without creating storage. `save()` accepts a complete basename-keyed snapshot of `Registration` objects and returns `true` or a `WP_Error`. It refuses to overwrite a malformed registry or any unsupported schema version, including future versions. Invalid records fail the whole read rather than disappearing from the next save. A failed update is distinguished from an unchanged update by reading back the exact stored value. No automatic repair or migration occurs.
+
+Storage does not enforce user capabilities, nonces, repository validity or conflicting registrations; future service/action handlers must do that before calling it. Complete-snapshot saves are not atomic read-modify-write operations: concurrent writers can overwrite each other's changes. Resolve coordination before exposing registration mutations through administrative actions. No per-request writes or activation-time storage initialization are introduced.
 
 Installed versions, Update URI diagnostics, release metadata, activation state and errors are live or cached information; they are not duplicated in the registration. The built-in self-update registration will remain separate. Repository URL normalization and registration services must validate external input before constructing records and translate validation exceptions into actionable WordPress errors.
 
@@ -53,6 +57,7 @@ php -l includes/class-environment.php
 php -l includes/class-plugin.php
 php tests/foundation.php
 php tests/registration.php
+php tests/option-storage.php
 php tests/unsupported-environment.php wordpress
 git diff --check
 ```
