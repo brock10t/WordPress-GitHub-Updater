@@ -1,6 +1,6 @@
 # 10T GitHub Updater
 
-A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. Currently implements the foundation, registration data model, option storage, installed-plugin discovery, GitHub URL validation and Update URI diagnostics; registration workflows, administration screens, installation and updates will arrive in later tasks.
+A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. Currently implements the foundation, registration data model, option storage, installed-plugin discovery, GitHub URL validation and Update URI diagnostics; internal registration operations; administration screens, complete conflict controls, installation and updates will arrive in later tasks.
 
 Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation is required. There are no mandatory third-party dependencies and production does not require Composer.
 
@@ -71,7 +71,23 @@ Future registration and Update URI handling should reuse this parser, then const
 
 Repository identity comparisons reuse URL normalization, including owner/name case and optional `.git`/trailing slash. There is an additional routing requirement: the header hostname must be literal lowercase `github.com`. WordPress derives the dynamic hook directly from `wp_parse_url(sanitize_url($header), PHP_URL_HOST)` and preserves hostname case. Thus `https://GITHUB.COM/owner/repo` identifies the same repository but does not select the planned `update_plugins_github.com` hook. This behavior was checked against [WordPress 6.6 update source](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-includes/update.php) and the native helpers on the local installation.
 
-Diagnostics explain how to involve the plugin author and provide the expected repository-root header. They do not modify files, store a status, authorize a registration, confirm repository visibility or make an update installable. Future registration and update handlers must obtain headers for the exact selected basename through installed-plugin discovery, then check compatibility again as appropriate. Allowing a pending registration versus rejecting incompatible headers remains a separate registration-policy decision. The updater's provisional `Update URI: false` stays unchanged until its actual self-update repository is confirmed.
+Diagnostics explain how to involve the plugin author and provide the expected repository-root header. They do not modify files, store a status, authorize a registration, confirm repository visibility or make an update installable. Future registration and update handlers must obtain headers for the exact selected basename through installed-plugin discovery, then check compatibility again as appropriate. The current provisional registration policy permits missing headers as pending and rejects all other incompatibilities; this policy is applied by the registry service, not by diagnostics. The updater's provisional `Update URI: false` stays unchanged until its actual self-update repository is confirmed.
+
+## Registry operations
+
+`Registry\Registry` coordinates option storage, installed-plugin discovery and URL/header checks. It is explicitly loaded by consumers and has no public HTTP action or operational hook yet.
+
+- `all()` returns the persisted basename-keyed records or a storage error.
+- `register($basename, $repository_url)` explicitly associates an installed directory-based plugin with normalized repository identity and returns a `Registration` or `WP_Error`. A missing Update URI permits a pending record; callers must display `check_update_uri()` guidance after success. Explicit `false`, malformed, conflicting and incorrectly routed headers reject registration. This is the recommended provisional policy pending the user's preference.
+- `get($basename)` reads one exact registered identity. It can return a record for a plugin that has since been deleted, so administrators can inspect and remove stale records.
+- `check_update_uri($basename)` resolves current installed headers and recomputes compatibility. A returned registration alone does not make a plugin eligible for updates.
+- `remove($basename)` removes only that exact registry record. It never uninstalls, deactivates or edits plugin files; missing installed files do not prevent removal of a stale registration.
+
+Registration never silently replaces an existing basename, and manual registration of the updater itself is reserved for built-in self-update support. Full repository/directory collision checks remain for the next task. Missing-header readiness is computed from current installed headers rather than a persisted flag; a header correction needs no registry rewrite. Until native update integration exists, no records produce update offers. Future update handlers must always check current compatibility before providing metadata or packages.
+
+Mutation methods require `update_plugins`, plus `manage_network_plugins` on Multisite. WordPress's capability mapping therefore also respects file-modification restrictions and the network administrator boundary. Future HTTP handlers must additionally restrict management to the correct admin context and verify nonces. Read operations remain available to internal update checks without a logged-in user.
+
+These operations currently save complete snapshots. Writer coordination and complete duplicate/conflict rules must be in place before administrative mutations are exposed; no concurrency safety is claimed yet.
 
 ## Development checks
 
@@ -87,6 +103,7 @@ php tests/option-storage.php
 php tests/installed-plugins.php
 php tests/repository.php
 php tests/update-uri.php
+php tests/registry.php
 php tests/unsupported-environment.php wordpress
 git diff --check
 ```
