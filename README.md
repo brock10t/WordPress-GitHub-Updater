@@ -1,6 +1,6 @@
 # 10T GitHub Updater
 
-A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. Currently implements the foundation only; registration, administration screens, installation and updates will arrive in later milestones.
+A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. Currently implements the foundation and registration data model; registry storage, administration screens, installation and updates will arrive in later tasks.
 
 Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation is required. There are no mandatory third-party dependencies and production does not require Composer.
 
@@ -14,6 +14,35 @@ Classes use the `TenT\GitHubUpdater` namespace and WordPress-style `class-*.php`
 
 `Update URI: false` prevents accidental WordPress.org update matching while the real self-update repository is unconfigured. It will be replaced with the confirmed repository URL when self-update support is added. No repository URL is assumed.
 
+## Registry data model
+
+`includes/registry/class-registration.php` defines an immutable `TenT\GitHubUpdater\Registry\Registration`. The installed plugin basename is its identity; the GitHub repository name can differ from the plugin directory. Construct records from an already-canonical basename and repository owner/name. The model provides structural checks, array serialization and consistency checks when restoring arrays. It does not discover installed plugins, validate repository URLs, contact GitHub, or establish that a repository is public or trusted.
+
+The planned option value uses a versioned envelope, with registrations keyed by their exact installed basenames:
+
+```php
+array(
+    'schema_version' => 1,
+    'registrations'  => array(
+        'my-plugin/main.php' => array(
+            'plugin_basename'  => 'my-plugin/main.php',
+            'plugin_slug'      => 'my-plugin',
+            'main_file'        => 'main.php',
+            'repository_owner' => 'example-owner',
+            'repository_name' => 'different-repository',
+            'repository_url'  => 'https://github.com/example-owner/different-repository',
+            'asset_name'      => 'my-plugin.zip',
+        ),
+    ),
+);
+```
+
+V1 supports directory-based plugins only; standalone PHP plugins directly under `wp-content/plugins` are rejected without relocation. Records preserve literal installed basename case and reject nested main-file paths, traversal components, backslashes, drive separators, control characters and percent-encoded paths. Repository component checks are structural only; full GitHub URL and owner/name rules belong to the URL-validation task.
+
+The option-storage task will implement this envelope in ordinary/network options and check that each array key matches its record's basename. No option is read or written yet. Store plain arrays, not serialized PHP objects. Derive the slug/main file from the basename, the ZIP name from the slug, and the repository URL from its owner/name. Restoring a record must reject inconsistent derived fields rather than silently repairing its identity.
+
+Installed versions, Update URI diagnostics, release metadata, activation state and errors are live or cached information; they are not duplicated in the registration. The built-in self-update registration will remain separate. Repository URL normalization and registration services must validate external input before constructing records and translate validation exceptions into actionable WordPress errors.
+
 ## Development checks
 
 Run from the plugin directory:
@@ -23,6 +52,7 @@ php -l wordpress-github-updater.php
 php -l includes/class-environment.php
 php -l includes/class-plugin.php
 php tests/foundation.php
+php tests/registration.php
 php tests/unsupported-environment.php wordpress
 git diff --check
 ```
