@@ -65,14 +65,15 @@ final class Registry {
 	 *
 	 * @param string $basename       Exact installed plugin basename.
 	 * @param string $repository_url Administrator-supplied GitHub repository URL.
+	 * @param bool   $allow_pending  Permit a missing-header pending registration.
 	 * @return Registration|WP_Error
 	 */
-	public function register( string $basename, string $repository_url ): Registration|WP_Error {
+	public function register( string $basename, string $repository_url, bool $allow_pending = true ): Registration|WP_Error {
 		$permission = $this->authorize_mutation();
 		if ( $permission instanceof WP_Error ) {
 			return $permission;
 		}
-		return $this->lock->run( fn() => $this->register_locked( $basename, $repository_url ) );
+		return $this->lock->run( fn() => $this->register_locked( $basename, $repository_url, $allow_pending ) );
 	}
 
 	/**
@@ -80,9 +81,10 @@ final class Registry {
 	 *
 	 * @param string $basename       Exact installed basename.
 	 * @param string $repository_url Selected GitHub URL.
+	 * @param bool   $allow_pending  Permit a missing-header pending registration.
 	 * @return Registration|WP_Error
 	 */
-	private function register_locked( string $basename, string $repository_url ): Registration|WP_Error {
+	private function register_locked( string $basename, string $repository_url, bool $allow_pending ): Registration|WP_Error {
 		$updater = plugin_basename( dirname( __DIR__, 2 ) . '/wordpress-github-updater.php' );
 		if ( strtolower( dirname( $basename ) ) === strtolower( dirname( $updater ) ) ) {
 			return new WP_Error( 'github_updater_self_registration_reserved', __( 'GitHub Updater uses separate built-in self-update registration when its repository is configured.', 'wordpress-github-updater' ) );
@@ -96,7 +98,7 @@ final class Registry {
 			return $repository;
 		}
 		$compatibility = Update_URI::check( $headers, $repository );
-		if ( $compatibility instanceof WP_Error && 'github_updater_missing_update_uri' !== $compatibility->get_error_code() ) {
+		if ( $compatibility instanceof WP_Error && ( ! $allow_pending || 'github_updater_missing_update_uri' !== $compatibility->get_error_code() ) ) {
 			return $compatibility;
 		}
 		$records = $this->all();

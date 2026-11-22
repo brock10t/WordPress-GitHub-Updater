@@ -1,6 +1,6 @@
 # 10T GitHub Updater
 
-A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. Currently implements the foundation, registration data model, option storage, installed-plugin discovery, GitHub URL validation and Update URI diagnostics; internal registration operations with conflict controls and coordinated writes; administration screens, installation and updates will arrive in later tasks.
+A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current milestone provides a native registration/removal screen, registry validation and coordinated storage. GitHub API release checks, installation and updates will arrive in later milestones.
 
 Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation is required. There are no mandatory third-party dependencies and production does not require Composer.
 
@@ -8,7 +8,7 @@ Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation i
 
 - `wordpress-github-updater.php` declares plugin metadata, registers the activation guard and checks requirements before loading the coordinator on `plugins_loaded`.
 - `includes/class-environment.php` checks versions and network activation and provides escaped administrative diagnostics. This file and the bootstrap deliberately avoid modern PHP syntax that would prevent an older runtime from reaching the version check (syntax baseline PHP 5.6).
-- `includes/class-plugin.php` coordinates component hooks. It has no operational hooks yet.
+- `includes/class-plugin.php` loads the registry/admin components only in administration requests and registers the screen and authenticated action hooks. Front-end requests do not load those components.
 
 Classes use the `TenT\GitHubUpdater` namespace and WordPress-style `class-*.php` filenames. Components load through explicit requires. Future components will separate registry persistence, GitHub requests, native update integration, package validation, administration and installation. No repository requests or database writes occur during foundation initialization.
 
@@ -39,7 +39,7 @@ array(
 
 V1 supports directory-based plugins only; standalone PHP plugins directly under `wp-content/plugins` are rejected without relocation. Records preserve literal installed basename case and reject nested main-file paths, traversal components, backslashes, drive separators, control characters and percent-encoded paths. Repository component checks are structural only; external repository URLs must pass through `GitHub\Repository::from_url()` before registration services construct a record.
 
-`Registry\Option_Storage` implements this envelope under `wordpress_github_updater_registry`, using `get_option`/`update_option` on single-site and `get_site_option`/`update_site_option` on Multisite (one shared registry per current network). Single-site storage disables autoload. It checks each array key against its record's basename. The adapter is not yet wired into operational plugin hooks, so initialization creates no registry option. Store plain arrays, not serialized PHP objects. Derive the slug/main file from the basename, the ZIP name from the slug, and the repository URL from its owner/name. Restoring a record must reject inconsistent derived fields rather than silently repairing its identity.
+`Registry\Option_Storage` implements this envelope under `wordpress_github_updater_registry`, using `get_option`/`update_option` on single-site and `get_site_option`/`update_site_option` on Multisite (one shared registry per current network). Single-site storage disables autoload. It checks each array key against its record's basename. The adapter is used by the administration registry workflow. Simply loading the plugin or viewing the screen creates no registry option. Store plain arrays, not serialized PHP objects. Derive the slug/main file from the basename, the ZIP name from the slug, and the repository URL from its owner/name. Restoring a record must reject inconsistent derived fields rather than silently repairing its identity.
 
 `load()` returns basename-keyed `Registration` objects or a `WP_Error`; an absent option returns an empty array without creating storage. `save()` accepts a complete basename-keyed snapshot of `Registration` objects and returns `true` or a `WP_Error`. It refuses to overwrite a malformed registry or any unsupported schema version, including future versions. Invalid records fail the whole read rather than disappearing from the next save. A failed update is distinguished from an unchanged update by reading back the exact stored value. No automatic repair or migration occurs.
 
@@ -63,7 +63,7 @@ Accepted input is an HTTPS repository root on exactly `github.com`, with two pat
 
 V1 accepts ordinary public account/organization owner syntax: 1–39 ASCII alphanumeric characters or single internal hyphens. Repository names use 1–100 ASCII letters, digits, periods, underscores or hyphens; `.` and `..` are rejected. These are local syntax constraints, not a complete determination of names GitHub will accept or resolve. Managed-user/enterprise-specific owner forms are outside this parser's current grammar. Case-insensitive repository identity and repository-name constraints were checked against [GitHub repository API documentation](https://docs.github.com/en/rest/repos/repos#get-a-repository) and [repository creation documentation](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-new-repository).
 
-Future registration and Update URI handling should reuse this parser, then construct `Registration` using its normalized owner/name and the separately discovered installed basename. Do not infer a plugin directory from the repository name. The parser is explicitly loaded by consumers and is not yet wired to administrative actions. It is not the allowlist or redirect validator for future asset downloads.
+Registration and Update URI handling reuse this parser, then construct `Registration` using its normalized owner/name and the separately discovered installed basename. Do not infer a plugin directory from the repository name. The admin coordinator explicitly loads the parser with its registry consumers. It is not the allowlist or redirect validator for future asset downloads.
 
 ## Update URI compatibility
 
@@ -71,14 +71,14 @@ Future registration and Update URI handling should reuse this parser, then const
 
 Repository identity comparisons reuse URL normalization, including owner/name case and optional `.git`/trailing slash. There is an additional routing requirement: the header hostname must be literal lowercase `github.com`. WordPress derives the dynamic hook directly from `wp_parse_url(sanitize_url($header), PHP_URL_HOST)` and preserves hostname case. Thus `https://GITHUB.COM/owner/repo` identifies the same repository but does not select the planned `update_plugins_github.com` hook. This behavior was checked against [WordPress 6.6 update source](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-includes/update.php) and the native helpers on the local installation.
 
-Diagnostics explain how to involve the plugin author and provide the expected repository-root header. They do not modify files, store a status, authorize a registration, confirm repository visibility or make an update installable. Future registration and update handlers must obtain headers for the exact selected basename through installed-plugin discovery, then check compatibility again as appropriate. The current provisional registration policy permits missing headers as pending and rejects all other incompatibilities; this policy is applied by the registry service, not by diagnostics. The updater's provisional `Update URI: false` stays unchanged until its actual self-update repository is confirmed.
+Diagnostics explain how to involve the plugin author and provide the expected repository-root header. They do not modify files, store a status, authorize a registration, confirm repository visibility or make an update installable. Future registration and update handlers must obtain headers for the exact selected basename through installed-plugin discovery, then check compatibility again as appropriate. The admin form permits missing-header registration only when the administrator explicitly checks the pending-registration option. Other incompatible headers reject registration. The internal registry API retains its earlier pending-enabled default for compatibility and accepts an explicit allow_pending argument; all HTTP submissions pass the checkbox choice. No global policy approval is inferred from the earlier unanswered preference question. The updater's provisional `Update URI: false` stays unchanged until its actual self-update repository is confirmed.
 
 ## Registry operations
 
-`Registry\Registry` coordinates option storage, installed-plugin discovery and URL/header checks. It is explicitly loaded by consumers and has no public HTTP action or operational hook yet.
+`Registry\Registry` coordinates option storage, installed-plugin discovery and URL/header checks. It is explicitly loaded by the admin coordinator and invoked through authenticated, POST-only handlers.
 
 - `all()` returns the persisted basename-keyed records or a storage error.
-- `register($basename, $repository_url)` explicitly associates an installed directory-based plugin with normalized repository identity and returns a `Registration` or `WP_Error`. A missing Update URI permits a pending record; callers must display `check_update_uri()` guidance after success. Explicit `false`, malformed, conflicting and incorrectly routed headers reject registration. This is the recommended provisional policy pending the user's preference.
+- `register($basename, $repository_url, $allow_pending = true)` explicitly associates an installed directory-based plugin with normalized repository identity and returns a `Registration` or `WP_Error`. A missing Update URI permits a pending record; callers must display `check_update_uri()` guidance after success. Explicit `false`, malformed, conflicting and incorrectly routed headers reject registration. The admin form always passes its explicit checkbox choice, including false when unchecked.
 - `get($basename)` reads one exact registered identity. It can return a record for a plugin that has since been deleted, so administrators can inspect and remove stale records.
 - `check_update_uri($basename)` resolves current installed headers and recomputes compatibility. A returned registration alone does not make a plugin eligible for updates.
 - `remove($basename)` removes only that exact registry record. It never uninstalls, deactivates or edits plugin files; missing installed files do not prevent removal of a stale registration.
@@ -91,7 +91,19 @@ Registry mutations use `Registry\Registry_Lock` to acquire a zero-wait MySQL/Mar
 
 This is cooperative locking for a stable connection to one primary database, using `$wpdb` only for prepared locking queries and native options APIs for persisted data. Raw storage writes or other code that ignores the lock are outside its protection. Database proxies/routers, reconnection/failover during a mutation, custom database backends and unusual persistent object caches require separate integration verification; the lock does not promise distributed or transactional recovery. Hosts disabling advisory locking cannot mutate the registry. Read-only diagnostics still work. The implementation follows [MySQL locking functions](https://dev.mysql.com/doc/refman/8.0/en/locking-functions.html) and [MariaDB GET_LOCK](https://mariadb.com/docs/server/reference/sql-functions/secondary-functions/miscellaneous-functions/get_lock).
 
-No administrative mutation endpoints exist yet. Their capability, nonce and Network Admin checks remain for the administration task.
+## Using the registration screen
+
+Open **Plugins → GitHub Updater**. On Multisite, use **Network Admin → Plugins → GitHub Updater**; ordinary site administrators cannot manage the network registry.
+
+Select an installed plugin by its displayed name and canonical basename, enter its public GitHub repository root URL, and submit **Register plugin**. Already-registered plugins and the updater itself are omitted from the selector. Standalone files remain visible but disabled. Shared directories and other conflicts are rejected by the registry after submission.
+
+The pending-registration checkbox is unchecked by default. Select it only if you want to save an association whose Update URI header is missing. The list then shows corrective guidance; no GitHub updates are offered until compatibility is resolved and native update integration exists. Explicitly disabled, malformed or conflicting headers must be corrected before registration. Files are never edited for you. Repository existence, public visibility and release availability are not checked yet.
+
+The table shows the installed version, canonical basename, repository link and current header/conflict diagnostics. **Remove registration** only removes the association; orphaned records remain removable. It does not uninstall or deactivate a plugin. No install, activation or update-check controls are part of this milestone.
+
+`Admin\Registry_Page` registers standard `admin_post_10t_gu_*` handlers on single-site and `network_admin_edit_10t_gu_*` handlers on Multisite. Network forms use `network/edit.php?action=...` rather than a nonexistent network admin-post endpoint. Rendering, menu inclusion and mutations check capabilities and admin context. POST values are type-checked, unslashed and validated without rewriting canonical identities. Nonces protect registration and are additionally bound to the basename on removal. Responses use a fixed local 303 redirect; per-user network-aware notices expire after one minute and are consumed once. Header, URL and notice output is escaped. [WordPress 6.6 network action source](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-admin/network/edit.php) defines the network handler route.
+
+Manual browser checks: register a test directory-based plugin using its actual public repository; try unchecked/checked pending registration, an invalid URL and conflicting header; refresh after submission; remove only its registration and verify the plugin remains installed/active as before. On a disposable Multisite installation, repeat from Network Admin and confirm site-admin/unauthorized attempts fail and a second site sees the same network registry. Real browser and Multisite checks remain pending; the native single-site integration verified menus, handlers, nonce checks, redirects, rendering, cross-request persistence and cleanup programmatically.
 
 ## Development checks
 
@@ -109,6 +121,7 @@ php tests/repository.php
 php tests/update-uri.php
 php tests/registry.php
 php tests/registry-lock.php
+php tests/admin.php
 php tests/unsupported-environment.php wordpress
 git diff --check
 ```
@@ -129,7 +142,7 @@ In disposable WordPress environments, verify:
 1. On WordPress 6.6 with PHP 8.2 and on current supported versions, confirm the Plugins screen recognizes the name, version and requirements; activate and reload the administration and front end without errors.
 2. On an unsupported WordPress/PHP version, confirm native activation rejection. For an already-active plugin after an environment downgrade, confirm a useful diagnostic for authorized administrators and no coordinator loading or fatal error.
 3. On Multisite, confirm network-only activation, successful Network Admin activation, and rejection of programmatic site-only activation. An incorrectly site-active copy must not initialize the coordinator.
-4. Confirm no GitHub requests, registry data, update offers or management screens are introduced by this foundation.
+4. Confirm the admin screen performs no GitHub requests or update/install actions, and that plugin initialization and a read-only page view do not create registry records. Test admin registration/removal separately with fixture cleanup.
 
 Later logic tests will cover repository normalization, versions, releases, registry validation and package identity with mocked HTTP. Installation, replacement, rollback and self-updates require disposable single-site and Multisite integration environments. Never test destructive update behavior on production.
 
