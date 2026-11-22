@@ -1,6 +1,6 @@
 # 10T GitHub Updater
 
-A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. Currently implements the foundation, registration data model, option storage and installed-plugin discovery; registration workflows, administration screens, installation and updates will arrive in later tasks.
+A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. Currently implements the foundation, registration data model, option storage, installed-plugin discovery and GitHub URL validation; registration workflows, administration screens, installation and updates will arrive in later tasks.
 
 Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation is required. There are no mandatory third-party dependencies and production does not require Composer.
 
@@ -37,7 +37,7 @@ array(
 );
 ```
 
-V1 supports directory-based plugins only; standalone PHP plugins directly under `wp-content/plugins` are rejected without relocation. Records preserve literal installed basename case and reject nested main-file paths, traversal components, backslashes, drive separators, control characters and percent-encoded paths. Repository component checks are structural only; full GitHub URL and owner/name rules belong to the URL-validation task.
+V1 supports directory-based plugins only; standalone PHP plugins directly under `wp-content/plugins` are rejected without relocation. Records preserve literal installed basename case and reject nested main-file paths, traversal components, backslashes, drive separators, control characters and percent-encoded paths. Repository component checks are structural only; external repository URLs must pass through `GitHub\Repository::from_url()` before registration services construct a record.
 
 `Registry\Option_Storage` implements this envelope under `wordpress_github_updater_registry`, using `get_option`/`update_option` on single-site and `get_site_option`/`update_site_option` on Multisite (one shared registry per current network). Single-site storage disables autoload. It checks each array key against its record's basename. The adapter is not yet wired into operational plugin hooks, so initialization creates no registry option. Store plain arrays, not serialized PHP objects. Derive the slug/main file from the basename, the ZIP name from the slug, and the repository URL from its owner/name. Restoring a record must reject inconsistent derived fields rather than silently repairing its identity.
 
@@ -55,6 +55,16 @@ Installed versions, Update URI diagnostics, release metadata, activation state a
 
 The directory-only format check is shared with the registration model; it does not prove installation by itself. Header values are untrusted text and must be escaped when displayed. Discovery does not validate Update URI, register plugins, read GitHub, inspect activation eligibility or write storage. Future administration actions must enforce capabilities and nonces and resolve the selected basename again before acting. Core's plugin cache must be invalidated appropriately after future install/update operations.
 
+## Repository URL validation
+
+`GitHub\Repository::from_url($url)` returns an immutable repository identity (`owner`, `name`, `url`) or `github_updater_invalid_repository_url` as a `WP_Error`. It performs no HTTP requests, redirects or persistence. A valid shape does not establish that the repository exists, is public, contains a WordPress plugin, or has an eligible release; the GitHub API client will check those separately.
+
+Accepted input is an HTTPS repository root on exactly `github.com`, with two path components. Host and scheme are case-insensitive; owner/name normalize to lowercase for comparisons. Ordinary surrounding spaces, one trailing slash and one `.git` suffix are normalized. The parser rejects credentials, explicit ports (including 443), queries/fragments (including empty ones), extra or empty path segments, percent encoding, backslashes, control characters, Unicode lookalikes, SSH/HTTP forms, host aliases and arbitrary download/API URLs. Repeated `.git` suffixes are rejected to keep canonicalization idempotent.
+
+V1 accepts ordinary public account/organization owner syntax: 1–39 ASCII alphanumeric characters or single internal hyphens. Repository names use 1–100 ASCII letters, digits, periods, underscores or hyphens; `.` and `..` are rejected. These are local syntax constraints, not a complete determination of names GitHub will accept or resolve. Managed-user/enterprise-specific owner forms are outside this parser's current grammar. Case-insensitive repository identity and repository-name constraints were checked against [GitHub repository API documentation](https://docs.github.com/en/rest/repos/repos#get-a-repository) and [repository creation documentation](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-new-repository).
+
+Future registration and Update URI handling should reuse this parser, then construct `Registration` using its normalized owner/name and the separately discovered installed basename. Do not infer a plugin directory from the repository name. The parser is explicitly loaded by consumers and is not yet wired to administrative actions. It is not the allowlist or redirect validator for future asset downloads.
+
 ## Development checks
 
 Run from the plugin directory:
@@ -67,6 +77,7 @@ php tests/foundation.php
 php tests/registration.php
 php tests/option-storage.php
 php tests/installed-plugins.php
+php tests/repository.php
 php tests/unsupported-environment.php wordpress
 git diff --check
 ```
