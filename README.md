@@ -1,6 +1,6 @@
 # 10T GitHub Updater
 
-A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current milestone provides a native registration/removal screen, registry validation and coordinated storage. Bounded GitHub REST transport and stable published-release candidate retrieval are available internally; version comparison, asset selection, cached update checks, installation and updates remain for later tasks.
+A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current milestone provides a native registration/removal screen, registry validation and coordinated storage. Bounded GitHub REST transport, stable published-release retrieval, tag normalization and version comparison are available internally; asset selection, cached update checks, installation and updates remain for later tasks.
 
 Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation is required. There are no mandatory third-party dependencies and production does not require Composer.
 
@@ -133,9 +133,19 @@ This step establishes publication/flag eligibility only. Raw tag text, asset met
 
 Each component is `0` or a nonzero-leading integer of up to nine digits, which fits signed 32-bit PHP integers. The normalized version is limited to 128 characters. Leading zeros, whitespace/controls, uppercase/repeated prefixes, labels, branch names, signs and prerelease/build suffixes are rejected. For v1, use numeric stable tags without build metadata. A prerelease-shaped tag is rejected even if a release author incorrectly marks it `prerelease: false`.
 
-Normalization does not trim, pad components, remove trailing zeros or strip qualifiers to manufacture a stable version. Thus `1.2` remains `1.2` and `1.2.0` remains `1.2.0`; equivalence and ordering belong to the next version-comparison task. Consumers must retain the original GitHub `tag_name` for asset paths and diagnostics; the normalized version is only for version semantics.
+Normalization does not trim, pad components, remove trailing zeros or strip qualifiers to manufacture a stable version. Thus `1.2` remains `1.2` and `1.2.0` remains `1.2.0`; the comparison helper pads only its private inputs so these versions compare as equivalent. Consumers must retain the original GitHub `tag_name` for asset paths and diagnostics; the normalized version is only for version semantics.
 
 The helper is explicitly loaded by consumers and is not yet combined with retrieval into an update selector. Stable_Releases still returns raw candidates. Future selection must apply this validator before comparing versions, then require a validated uploaded asset. No update offers, downloads or installed-header version changes are introduced by this step.
+
+## Version comparison
+
+`GitHub\Version_Comparison::compare($release_tag, $installed_version)` returns `-1` for an older release, `0` for an equivalent version, `1` for a newer release, or a `WP_Error`. Check for an error before using the result. Both the original release tag and installed `Version` header must satisfy the supported stable numeric format, including its optional lowercase `v`, length and digit bounds.
+
+The helper normalizes both strings, pads the shorter numeric component list with zeros, then uses PHP's `version_compare()`. Thus `v1.2`, `1.2.0` and `1.2.0.0` compare equal; `1.10` is newer than `1.9`; additional nonzero components remain significant. Padding is internal and does not rewrite the original tag, displayed installed version or plugin source.
+
+Unsupported release tags retain `github_updater_unsupported_release_tag`; unsupported installed versions return `github_updater_unsupported_installed_version`. Empty, unrecognized, qualified or otherwise unsupported installed values never default to zero and cannot manufacture a newer-release result. Version headers containing prerelease qualifiers are outside the current supported comparison format.
+
+This is a pure, explicitly loaded helper. It does not pick a release from a list, prove publication, validate package assets, contact GitHub or write any state. Future update selection must require stable publication/flags, valid versions and a positive comparison result together with the correct validated uploaded ZIP; equal/older releases must not be offered as upgrades. No managed-plugin version bump is needed until native update integration can test an actual upgrade.
 
 ## Development checks
 
@@ -157,6 +167,7 @@ php tests/admin.php
 php tests/api-client.php
 php tests/stable-releases.php
 php tests/release-tag.php
+php tests/version-comparison.php
 php tests/unsupported-environment.php wordpress
 git diff --check
 ```
