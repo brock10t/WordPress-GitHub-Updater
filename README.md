@@ -1,6 +1,6 @@
 # 10T GitHub Updater
 
-A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current milestone provides a native registration/removal screen, registry validation and coordinated storage. Bounded GitHub REST transport, stable published-release retrieval, tag normalization and version comparison are available internally; asset selection, cached update checks, installation and updates remain for later tasks.
+A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current milestone provides a native registration/removal screen, registry validation and coordinated storage. Bounded GitHub REST transport, stable published-release retrieval, tag normalization and version comparison are available internally; uploaded ZIP asset identification is also available; caching, integrated update selection, installation and updates remain for later tasks.
 
 Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation is required. There are no mandatory third-party dependencies and production does not require Composer.
 
@@ -147,6 +147,18 @@ Unsupported release tags retain `github_updater_unsupported_release_tag`; unsupp
 
 This is a pure, explicitly loaded helper. It does not pick a release from a list, prove publication, validate package assets, contact GitHub or write any state. Future update selection must require stable publication/flags, valid versions and a positive comparison result together with the correct validated uploaded ZIP; equal/older releases must not be offered as upgrades. No managed-plugin version bump is needed until native update integration can test an actual upgrade.
 
+## Required ZIP asset identification
+
+`GitHub\Release_Asset::select($release, $registration)` returns an immutable metadata pointer (`id`, `name`, declared `size`, `api_url`, `download_url`) or a `WP_Error`. It examines only uploaded `assets`; automatically generated `zipball_url`/`tarball_url` archives are never fallback packages. The required name is the registration's exact `plugin_slug.zip`, including case, regardless of repository or main-file name.
+
+Exactly one asset must match. Missing or duplicate filenames, malformed asset lists, missing names, unfinished upload state, nonpositive/noninteger ID or size, and invalid URL fields fail closed. Other well-named assets such as checksums do not need ZIP metadata because they are not selected. Only validated pointer fields are returned; unvalidated extra metadata is not promoted into a trusted result.
+
+Both URLs are pinned to literal HTTPS GitHub hosts and the registered repository identity. The metadata endpoint must be `https://api.github.com/repos/owner/repository/releases/assets/ID`; the browser URL must be `https://github.com/owner/repository/releases/download/ORIGINAL_TAG/EXPECTED_FILENAME`. Owner/repository letter-case differences are permitted, but the tag, filename and encoded suffix must match exactly. No credentials, ports, queries, fragments, arbitrary endpoints or redirect destinations are accepted. A raw `v1.0.0` tag stays `v1.0.0` in the download path even though its comparison version is `1.0.0`. Endpoint shapes were checked against [GitHub release-asset documentation](https://docs.github.com/en/rest/releases/assets#get-a-release-asset).
+
+This selects metadata, not an installable archive. Publication eligibility, installed-version comparison and actual package validation remain separate gates. Declared size and MIME type do not establish ZIP integrity; MIME is not used to select a package. A future downloader must impose actual byte/resource limits, revalidate metadata as appropriate and validate every download redirect before archive inspection. This helper performs no requests or writes and does not expose package metadata to WordPress's updater yet.
+
+A native metadata-only check identified the existing test release's `wordpress-schedule-post-updates.zip` (declared 10,987 bytes) using an explicit in-memory test registration. It did not infer or register an installed main-file basename, download the archive, or validate its contents. Keep the test plugin at `v1.0.0` until an actual update test is ready.
+
 ## Development checks
 
 Run from the plugin directory:
@@ -168,6 +180,7 @@ php tests/api-client.php
 php tests/stable-releases.php
 php tests/release-tag.php
 php tests/version-comparison.php
+php tests/release-asset.php
 php tests/unsupported-environment.php wordpress
 git diff --check
 ```
