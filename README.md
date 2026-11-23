@@ -1,6 +1,6 @@
 # 10T GitHub Updater
 
-A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current milestone provides a native registration/removal screen, registry validation and coordinated storage. A bounded GitHub REST transport is also available internally; stable-release selection, cached update checks, installation and updates remain for later tasks.
+A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current milestone provides a native registration/removal screen, registry validation and coordinated storage. Bounded GitHub REST transport and stable published-release candidate retrieval are available internally; tag/version validation, asset selection, cached update checks, installation and updates remain for later tasks.
 
 Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation is required. There are no mandatory third-party dependencies and production does not require Composer.
 
@@ -117,6 +117,16 @@ The transport is not wired into page views, registration or native update checks
 
 The user supplied [wordpress-schedule-post-updates](https://github.com/brock10t/wordpress-schedule-post-updates) as a public test plugin. A read-only native WordPress HTTP check observed `v1.0.0` and an uploaded `wordpress-schedule-post-updates.zip` on 2026-11-22. No package was downloaded or validated, and no installability is asserted. This repository is unrelated to the updater's still-unconfigured built-in self-update source. Automated transport tests use mocked responses and do not depend on this live release remaining unchanged.
 
+## Stable published-release retrieval
+
+`GitHub\Stable_Releases::get($repository)` first verifies matching public repository metadata, then scans release-list pages through `Api_Client`. It returns an array of stable published candidates or a `WP_Error`. Empty completed results mean no candidates. It is explicitly loaded by consumers and is not wired into the administration screen or native update hooks yet.
+
+The scan requests 100 entries per page, at most five pages plus the repository check. It continues until an empty page, so a short page does not hide later entries. An empty page must occur within that bound: exhausting all five nonempty pages returns `github_updater_release_scan_incomplete`, even if some candidates were found. Requests that fail on later pages also return an error, never a partial result. No Link URL, `/latest` endpoint, branch, commit or source-archive endpoint is followed. Pagination is not a transactional GitHub snapshot; repeated candidate IDs are detected and return `github_updater_release_scan_changed` rather than being silently deduplicated.
+
+Both `draft` and `prerelease` must be explicit booleans. Either true excludes the entry; explicit null `published_at` also excludes it. Candidate IDs must be positive integers, tags nonempty strings without controls, and publication dates valid UTC GitHub timestamps. Missing or malformed required metadata fails the scan rather than hiding a potentially newer candidate. Results sort by publication time descending, then release ID descending for deterministic ties; neither API order nor tag text determines that ordering.
+
+This step establishes publication/flag eligibility only. Raw tag text, asset metadata and other fields remain untrusted. A release incorrectly marked stable with a prerelease-shaped tag will still need the upcoming tag validator; these candidate arrays are not installable update metadata. Numeric version selection, package assets, caching and backoff remain later tasks. The live test repository's existing `v1.0.0` is sufficient for this step; keep it as the baseline until native update integration is ready for an upgrade test.
+
 ## Development checks
 
 Run from the plugin directory:
@@ -135,6 +145,7 @@ php tests/registry.php
 php tests/registry-lock.php
 php tests/admin.php
 php tests/api-client.php
+php tests/stable-releases.php
 php tests/unsupported-environment.php wordpress
 git diff --check
 ```
