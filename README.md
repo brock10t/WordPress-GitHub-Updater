@@ -1,6 +1,6 @@
 # 10T GitHub Updater
 
-A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current milestone provides a native registration/removal screen, registry validation and coordinated storage. GitHub API release checks, installation and updates will arrive in later milestones.
+A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current milestone provides a native registration/removal screen, registry validation and coordinated storage. A bounded GitHub REST transport is also available internally; stable-release selection, cached update checks, installation and updates remain for later tasks.
 
 Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation is required. There are no mandatory third-party dependencies and production does not require Composer.
 
@@ -105,6 +105,18 @@ The table shows the installed version, canonical basename, repository link and c
 
 Manual browser checks: register a test directory-based plugin using its actual public repository; try unchecked/checked pending registration, an invalid URL and conflicting header; refresh after submission; remove only its registration and verify the plugin remains installed/active as before. On a disposable Multisite installation, repeat from Network Admin and confirm site-admin/unauthorized attempts fail and a second site sees the same network registry. Real browser and Multisite checks remain pending; the native single-site integration verified menus, handlers, nonce checks, redirects, rendering, cross-request persistence and cleanup programmatically.
 
+## GitHub REST transport
+
+`GitHub\Api_Client` uses WordPress's `wp_safe_remote_get()` for two internally constructed endpoints on `https://api.github.com`: repository metadata and one paginated releases list. Call `get_repository($repository)` to confirm a matching public repository, or `get_releases_page($repository, $page = 1, $per_page = 100)` for raw release entries. Methods return decoded arrays or `WP_Error`; no arbitrary URL or endpoint can be supplied. Raw release entries are not eligible releases or trusted download instructions yet.
+
+Requests use TLS verification, a 10-second timeout, a 1 MiB response-body limit (with a one-byte overflow check), an explicit JSON media type and API version `2022-11-28`. The static user agent does not disclose the site's URL. Responses request identity encoding, require JSON content type and the expected object/list root, and limit JSON nesting. Repository metadata must identify the selected repository and explicitly describe it as public. The API version is [currently supported by GitHub](https://docs.github.com/en/rest/about-the-rest-api/api-versions).
+
+Metadata redirects are refused rather than followed, including same-host redirects. Repository moves therefore require review of the registered URL. HTTP/transport errors, malformed metadata, oversized bodies, private/mismatched repository identity and basic rate-limit responses return safe errors without reflecting remote body text. A bounded numeric Retry-After hint may be returned as error data; the client does not sleep or retry. Missing and private resources cannot reliably be distinguished from a 404 alone.
+
+The transport is not wired into page views, registration or native update checks. It does not cache, scan pages, select a stable release, compare versions, download ZIPs or install anything. Release eligibility, asset validation, caching and failure backoff remain separate Milestone 3 tasks. Future consumers must add caching before routine automatic checks. GitHub HTTP arguments were checked against [WordPress 6.6 HTTP source](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-includes/class-wp-http.php).
+
+The user supplied [wordpress-schedule-post-updates](https://github.com/brock10t/wordpress-schedule-post-updates) as a public test plugin. A read-only native WordPress HTTP check observed `v1.0.0` and an uploaded `wordpress-schedule-post-updates.zip` on 2026-11-22. No package was downloaded or validated, and no installability is asserted. This repository is unrelated to the updater's still-unconfigured built-in self-update source. Automated transport tests use mocked responses and do not depend on this live release remaining unchanged.
+
 ## Development checks
 
 Run from the plugin directory:
@@ -122,6 +134,7 @@ php tests/update-uri.php
 php tests/registry.php
 php tests/registry-lock.php
 php tests/admin.php
+php tests/api-client.php
 php tests/unsupported-environment.php wordpress
 git diff --check
 ```
