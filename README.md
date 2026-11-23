@@ -1,6 +1,6 @@
 # 10T GitHub Updater
 
-A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current milestone provides a native registration/removal screen, registry validation and coordinated storage. Bounded GitHub REST transport and stable published-release candidate retrieval are available internally; tag/version validation, asset selection, cached update checks, installation and updates remain for later tasks.
+A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current milestone provides a native registration/removal screen, registry validation and coordinated storage. Bounded GitHub REST transport and stable published-release candidate retrieval are available internally; version comparison, asset selection, cached update checks, installation and updates remain for later tasks.
 
 Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation is required. There are no mandatory third-party dependencies and production does not require Composer.
 
@@ -127,6 +127,16 @@ Both `draft` and `prerelease` must be explicit booleans. Either true excludes th
 
 This step establishes publication/flag eligibility only. Raw tag text, asset metadata and other fields remain untrusted. A release incorrectly marked stable with a prerelease-shaped tag will still need the upcoming tag validator; these candidate arrays are not installable update metadata. Numeric version selection, package assets, caching and backoff remain later tasks. The live test repository's existing `v1.0.0` is sufficient for this step; keep it as the baseline until native update integration is ready for an upgrade test.
 
+## Release-tag normalization
+
+`GitHub\Release_Tag::normalize($tag)` returns a numeric version string or `github_updater_unsupported_release_tag` as a `WP_Error`. Accepted tags contain at least two dot-separated numeric components, optionally preceded by one lowercase `v`. Examples: `v1.0.0` becomes `1.0.0`; `1.2`, `1.2.3.4` and numeric calendar versions retain their components.
+
+Each component is `0` or a nonzero-leading integer of up to nine digits, which fits signed 32-bit PHP integers. The normalized version is limited to 128 characters. Leading zeros, whitespace/controls, uppercase/repeated prefixes, labels, branch names, signs and prerelease/build suffixes are rejected. For v1, use numeric stable tags without build metadata. A prerelease-shaped tag is rejected even if a release author incorrectly marks it `prerelease: false`.
+
+Normalization does not trim, pad components, remove trailing zeros or strip qualifiers to manufacture a stable version. Thus `1.2` remains `1.2` and `1.2.0` remains `1.2.0`; equivalence and ordering belong to the next version-comparison task. Consumers must retain the original GitHub `tag_name` for asset paths and diagnostics; the normalized version is only for version semantics.
+
+The helper is explicitly loaded by consumers and is not yet combined with retrieval into an update selector. Stable_Releases still returns raw candidates. Future selection must apply this validator before comparing versions, then require a validated uploaded asset. No update offers, downloads or installed-header version changes are introduced by this step.
+
 ## Development checks
 
 Run from the plugin directory:
@@ -146,6 +156,7 @@ php tests/registry-lock.php
 php tests/admin.php
 php tests/api-client.php
 php tests/stable-releases.php
+php tests/release-tag.php
 php tests/unsupported-environment.php wordpress
 git diff --check
 ```
