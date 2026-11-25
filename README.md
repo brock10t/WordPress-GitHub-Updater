@@ -218,6 +218,7 @@ php tests/api-resilience.php
 php tests/api-response-matrix.php
 php tests/release-selection.php
 php tests/archive-manifest.php
+php tests/zip-inspector.php
 php tests/check-state.php
 php tests/stable-releases.php
 php tests/release-tag.php
@@ -277,7 +278,7 @@ Cooldown states retain bounded retry deadlines. `retry_suggested_now()` is only 
 
 ## Pre-extraction manifest policy
 
-`Packages\\Archive_Manifest::check($entries, $registration)` is the first package-security layer. It validates a complete reader-produced entry list without extracting files or reading a ZIP. Each entry must describe its raw name, file/directory type, declared expanded/compressed sizes, encryption flag and compression method. The future reader must inspect every raw record and derive these fields from archive data; user-supplied or sanitized lists cannot establish archive safety.
+`Packages\\Archive_Manifest::check($entries, $registration)` is the first package-security layer. It validates a complete reader-produced entry list without extracting files or reading a ZIP. Each entry must describe its raw name, file/directory type, declared expanded/compressed sizes, encryption flag and compression method. `Zip_Inspector` supplies this list after raw-record checks; user-supplied or sanitized lists cannot establish archive safety.
 
 The policy requires only the exact registered root directory and a nonempty file at the registered main basename. Explicit directory records are optional. It rejects traversal/absolute/backslash paths, empty or dot segments, control characters, encoded-path syntax, Windows-reserved names, trailing dots/spaces, duplicate paths, case collisions and file/directory conflicts, including implicit parents. It permits only conservative ASCII names, ordinary files/directories, unencrypted stored/deflated entries. Packages with Unicode names or extra roots such as `__MACOSX` are rejected rather than rewritten.
 
@@ -289,7 +290,19 @@ The policy requires only the exact registered root directory and a nonempty file
 | Total declared expanded / compressed entry bytes | 100 MiB / 50 MiB |
 | Declared per-entry expansion ratio | 100:1 |
 
-Passing this policy returns `true`; failures return fixed `WP_Error` diagnostics without reflecting entry paths. A pass is not package approval. ZIP record consistency, actual archive/download size, bounded decompression and actual-byte limits, headers/version/repository identity, compatibility and destination conflicts remain mandatory. Nothing invokes this component from update hooks or the administration screen yet.
+Passing this policy returns `true`; failures return fixed `WP_Error` diagnostics without reflecting entry paths. A pass is not package approval. ZIP inspection adds record consistency and an actual local archive size cap. Bounded download/decompression and actual expanded-byte limits, headers/version/repository identity, compatibility and destination conflicts remain mandatory. Nothing invokes this component from update hooks or the administration screen yet.
+
+## ZIP record inspection
+
+`Packages\Zip_Inspector::inspect($absolute_local_path, $registration)` reads a caller-owned stable regular temporary file, capped at 50 MiB including headers and comments. It returns the complete raw manifest only after record checks and `Archive_Manifest::check()` pass, or a fixed `WP_Error`. Explicitly load it and its concrete dependencies. It never downloads, extracts, executes plugin code or modifies the archive. PHP must be 64-bit; no ZipArchive extension or external executable is used.
+
+The supported subset is classic single-disk ZIP with stored/deflated entries, known DOS or Unix creators, ordinary file/directory attributes and optional signed/unsigned 32-bit data descriptors. Only bounded timestamp/ownership extra fields (0x5455, 0x7875, 0x000a) are allowed; they are ignored as opaque metadata and cannot rename entries. ZIP64, spanning, encryption, alternate-name extras, unknown creator/types/flags, special permissions and malformed records fail closed. This intentionally excludes some otherwise valid ZIPs rather than falling back to a more permissive reader.
+
+Inspection compares central and local raw names, flags, methods, timestamps, sizes and CRC declarations; validates descriptor declarations; checks central-directory boundaries and unique end record; and requires contiguous nonoverlapping local records from byte zero. Duplicate names are preserved for manifest rejection. Stubs, hidden/unindexed local records, padding and trailing bytes are rejected. These record rules follow the [PKWARE ZIP specification](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT).
+
+A manifest pass is not a CRC or payload-integrity check: compressed data is not decompressed here. Future content validation must enforce actual expanded-byte limits, CRCs and exact plugin headers/compatibility, using the same protected bytes and inspected entries. The caller must prevent changes to the temporary file between stages; neither a path nor a manifest is a reusable approval token. Native update offers remain unwired.
+
+`php tests/zip-inspector.php` uses actual temporary ZIP bytes, independently written Python ZIP vectors, hostile record mutations, truncation at every byte of a small archive, descriptors, overlap checks, path/type/extra-field failures and an oversized sparse file. Fixture creation uses test-only zlib; Python is not needed to run the embedded vectors. Temporary files are cleaned up. No archive is extracted.
 
 ## Release and trust boundaries
 
