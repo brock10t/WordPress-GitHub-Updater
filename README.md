@@ -217,6 +217,7 @@ php tests/api-client.php
 php tests/api-resilience.php
 php tests/api-response-matrix.php
 php tests/release-selection.php
+php tests/archive-manifest.php
 php tests/check-state.php
 php tests/stable-releases.php
 php tests/release-tag.php
@@ -273,6 +274,22 @@ Results are an immutable `Release_Candidate` (identity, original tag, normalized
 `GitHub\\Check_State` is an explicitly loaded, unhooked presentation adapter. `from_error($error)` maps known GitHub, header, version, asset and cache errors to fixed translated titles, descriptions and next steps. Unknown errors receive a conservative fallback; remote messages, arbitrary data and package URLs are excluded. Keep the original `WP_Error` for diagnostics and escape view text when rendering.
 
 Cooldown states retain bounded retry deadlines. `retry_suggested_now()` is only a display hint: backend cooldowns, capabilities and nonces still govern requests. No retry is scheduled. `no_releases()` is reserved for a completed validated empty scan; `no_update()` requires a completed successful comparison. Failed checks never become either successful outcome. This adapter does not retrieve releases, establish package eligibility or add administration controls.
+
+## Pre-extraction manifest policy
+
+`Packages\\Archive_Manifest::check($entries, $registration)` is the first package-security layer. It validates a complete reader-produced entry list without extracting files or reading a ZIP. Each entry must describe its raw name, file/directory type, declared expanded/compressed sizes, encryption flag and compression method. The future reader must inspect every raw record and derive these fields from archive data; user-supplied or sanitized lists cannot establish archive safety.
+
+The policy requires only the exact registered root directory and a nonempty file at the registered main basename. Explicit directory records are optional. It rejects traversal/absolute/backslash paths, empty or dot segments, control characters, encoded-path syntax, Windows-reserved names, trailing dots/spaces, duplicate paths, case collisions and file/directory conflicts, including implicit parents. It permits only conservative ASCII names, ordinary files/directories, unencrypted stored/deflated entries. Packages with Unicode names or extra roots such as `__MACOSX` are rejected rather than rewritten.
+
+| Limit | Maximum |
+| --- | --- |
+| Entries | 5,000 |
+| Raw path length / depth | 240 bytes / 20 components including root |
+| Declared size per file | 20 MiB |
+| Total declared expanded / compressed entry bytes | 100 MiB / 50 MiB |
+| Declared per-entry expansion ratio | 100:1 |
+
+Passing this policy returns `true`; failures return fixed `WP_Error` diagnostics without reflecting entry paths. A pass is not package approval. ZIP record consistency, actual archive/download size, bounded decompression and actual-byte limits, headers/version/repository identity, compatibility and destination conflicts remain mandatory. Nothing invokes this component from update hooks or the administration screen yet.
 
 ## Release and trust boundaries
 
