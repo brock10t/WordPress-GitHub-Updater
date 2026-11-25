@@ -24,6 +24,28 @@ final class Zip_Inspector {
 	 * @return array<int, array<string, mixed>>|WP_Error
 	 */
 	public function inspect( string $path, Registration $registration ): array|WP_Error {
+		return $this->with_entries( $path, $registration, static function ( $stream, array $entries ): array {
+			foreach ( $entries as &$entry ) {
+				unset( $entry['data_offset'], $entry['crc32'] );
+			}
+			unset( $entry );
+			return $entries;
+		} );
+	}
+
+	/**
+	 * Consume inspected payload records on this same read-only file handle.
+	 * Adds data_offset and hexadecimal crc32 to each manifest entry. No callback
+	 * runs until all records and manifest policy pass. The callback must neither
+	 * retain nor close the handle; ownership remains here, closed in finally.
+	 * No result is a reusable package-approval token.
+	 *
+	 * @param string       $path         Caller-owned stable local archive.
+	 * @param Registration $registration Expected identity.
+	 * @param callable      $consume      Receives open stream and validated records.
+	 * @return mixed Callback result or WP_Error before consumption.
+	 */
+	public function with_entries( string $path, Registration $registration, callable $consume ): mixed {
 		if ( PHP_INT_SIZE < 8 ) {
 			return $this->error( 'unsupported', __( 'ZIP inspection requires a 64-bit PHP runtime.', 'wordpress-github-updater' ) );
 		}
@@ -44,7 +66,7 @@ final class Zip_Inspector {
 				return $result;
 			}
 			$check = Archive_Manifest::check( $result, $registration );
-			return $check instanceof WP_Error ? $check : $result;
+			return $check instanceof WP_Error ? $check : $consume( $stream, $result );
 		} finally {
 			fclose( $stream );
 		}
@@ -157,7 +179,7 @@ final class Zip_Inspector {
 				}
 				$cursor += $signed ? 16 : 12;
 			}
-			$manifest[] = array( 'name' => $h['raw_name'], 'type' => $h['type'], 'size' => $h['size'], 'compressed_size' => $h['compressed'], 'encrypted' => false, 'method' => $h['method'] );
+			$manifest[] = array( 'name' => $h['raw_name'], 'type' => $h['type'], 'size' => $h['size'], 'compressed_size' => $h['compressed'], 'encrypted' => false, 'method' => $h['method'], 'data_offset' => $start, 'crc32' => sprintf( '%08x', $h['crc'] ) );
 		}
 		return $cursor === $end['offset'] ? $manifest : $this->invalid();
 	}

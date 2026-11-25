@@ -115,7 +115,7 @@ Metadata redirects are refused rather than followed, including same-host redirec
 
 The transport is not wired into page views, registration or native update checks. It does not cache, scan pages, select a stable release, compare versions, download ZIPs or install anything. Release eligibility, asset validation and caching/backoff are separate components; this transport does not implement their policies. Future consumers must add caching before routine automatic checks. GitHub HTTP arguments were checked against [WordPress 6.6 HTTP source](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-includes/class-wp-http.php).
 
-The user supplied [wordpress-schedule-post-updates](https://github.com/brock10t/wordpress-schedule-post-updates) as a public test plugin. A read-only native WordPress HTTP check observed `v1.0.0` and an uploaded `wordpress-schedule-post-updates.zip` on 2026-11-22. No package was downloaded or validated, and no installability is asserted. This repository is unrelated to the updater's still-unconfigured built-in self-update source. Automated transport tests use mocked responses and do not depend on this live release remaining unchanged.
+The user supplied [wordpress-schedule-post-updates](https://github.com/brock10t/wordpress-schedule-post-updates) as a public test plugin. A read-only native WordPress HTTP check observed `v1.0.0` and an uploaded `wordpress-schedule-post-updates.zip` on 2026-11-22. Later package-stage checks downloaded this baseline temporarily and verified ZIP structure, expanded sizes and CRCs without extraction or installation; this does not establish header compatibility or installability. This repository is unrelated to the updater's still-unconfigured built-in self-update source. Automated transport tests use mocked responses and do not depend on this live release remaining unchanged.
 
 ## Stable published-release retrieval
 
@@ -219,6 +219,7 @@ php tests/api-response-matrix.php
 php tests/release-selection.php
 php tests/archive-manifest.php
 php tests/zip-inspector.php
+php tests/zip-contents.php
 php tests/asset-downloader.php
 php tests/check-state.php
 php tests/stable-releases.php
@@ -311,9 +312,19 @@ The supported subset is classic single-disk ZIP with stored/deflated entries, kn
 
 Inspection compares central and local raw names, flags, methods, timestamps, sizes and CRC declarations; validates descriptor declarations; checks central-directory boundaries and unique end record; and requires contiguous nonoverlapping local records from byte zero. Duplicate names are preserved for manifest rejection. Stubs, hidden/unindexed local records, padding and trailing bytes are rejected. These record rules follow the [PKWARE ZIP specification](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT).
 
-A manifest pass is not a CRC or payload-integrity check: compressed data is not decompressed here. Future content validation must enforce actual expanded-byte limits, CRCs and exact plugin headers/compatibility, using the same protected bytes and inspected entries. The caller must prevent changes to the temporary file between stages; neither a path nor a manifest is a reusable approval token. Native update offers remain unwired.
+A manifest pass is not a CRC or payload-integrity check: compressed data is not decompressed here. `Zip_Contents` enforces actual expanded-byte limits and CRCs on the same open handle after inspection. Exact plugin headers and compatibility still require validation. The caller must prevent changes to the temporary file between stages; neither a path nor a manifest is a reusable approval token. Native update offers remain unwired.
 
 `php tests/zip-inspector.php` uses actual temporary ZIP bytes, independently written Python ZIP vectors, hostile record mutations, truncation at every byte of a small archive, descriptors, overlap checks, path/type/extra-field failures and an oversized sparse file. Fixture creation uses test-only zlib; Python is not needed to run the embedded vectors. Temporary files are cleaned up. No archive is extracted.
+
+## ZIP payload integrity
+
+`Packages\Zip_Contents::check($local_path, $registration)` runs the ZIP record/manifest gates and validates every stored or deflated payload on the inspector's same open read-only handle. The inspector's `with_entries()` callback supplies checked payload offsets and hexadecimal CRC declarations only after the entire archive layout passes; its public `inspect()` manifest shape is unchanged. The handle is closed in `finally`, including consumer exceptions. No caller-supplied manifest can bypass inspection.
+
+Stored data is read in 64 KiB chunks; raw deflate input uses 256-byte chunks. PHP's incremental zlib API has no output-length argument, so small input chunks limit temporary expansion per call; each resulting output chunk is immediately checked, hashed and discarded. No complete decompressed file is retained. The check enforces exact declared expanded sizes, the existing 20 MiB per-file and 100 MiB aggregate expanded limits, and a 30-second monotonic budget checked between operations. It requires deflate stream completion and exact compressed-byte consumption, rejecting truncated streams, trailing garbage and concatenated streams. Calculated CRC32 must match each entry, including empty files and directories. CRC is an integrity check, not proof of authenticity or safe code.
+
+Missing incremental zlib functions produce a fixed error for deflated packages; stored payloads remain supported. This is a package capability gate, not a new plugin activation requirement. Malformed-data zlib warnings become fixed errors, with the prior error handler restored. The implementation uses PHP's [incremental inflater](https://www.php.net/manual/en/function.inflate-add.php), [stream status](https://www.php.net/manual/en/function.inflate-get-status.php) and [consumed-byte count](https://www.php.net/manual/en/function.inflate-get-read-len.php).
+
+`php tests/zip-contents.php` covers real ZIP payload corruption, CRC and size mismatches, truncated/extra/concatenated deflate data, stored/deflated and descriptor cases, empty files/directories, an actual file-size overflow, exact size boundaries, deadlines, missing-zlib behavior and stream/error-handler cleanup. A subprocess validates 100 MiB of expanded content with PHP `memory_limit=16M`. No archive is extracted. A successful result still requires packaged plugin header/version/repository/runtime checks and replacement conflict checks before update integration; the downloader callback must retain cleanup ownership throughout validation.
 
 ## Release and trust boundaries
 
