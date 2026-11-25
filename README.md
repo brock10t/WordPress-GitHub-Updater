@@ -1,6 +1,6 @@
 # 10T GitHub Updater
 
-A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current milestone provides a native registration/removal screen, registry validation and coordinated storage. Bounded GitHub REST transport, stable published-release retrieval, tag normalization and version comparison are available internally; uploaded ZIP asset identification is also available; caching, integrated update selection, installation and updates remain for later tasks.
+A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current administration screen supports explicit registration and removal. Internal components provide bounded REST retrieval, stable release candidates, version comparison, asset identification and network-aware metadata caching. Integrated update selection, installation and updates remain for later tasks.
 
 Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation is required. There are no mandatory third-party dependencies and production does not require Composer.
 
@@ -159,6 +159,20 @@ This selects metadata, not an installable archive. Publication eligibility, inst
 
 A native metadata-only check identified the existing test release's `wordpress-schedule-post-updates.zip` (declared 10,987 bytes) using an explicit in-memory test registration. It did not infer or register an installed main-file basename, download the archive, or validate its contents. Keep the test plugin at `v1.0.0` until an actual update test is ready.
 
+## Release caching and invalidation
+
+`GitHub\Cached_Releases` wraps the uncached `Stable_Releases` reader. `get($repository)` returns a revalidated completed candidate list or `WP_Error`. `get($repository, true)` performs an explicit manual refresh, bypassing both successful entries and failure backoff. `invalidate($repository)` removes that repository's current-scope success/error entry and returns `true` (including when absent) or `WP_Error`.
+
+Successful results, including an empty candidate list, have a **12-hour** lifetime. Failures have a **five-minute** minimum backoff; an existing numeric Retry-After hint can extend it up to one day. No sleeping or automatic retry loop is added. Forced refresh is for authorized user actions, never routine update checks. A forced refresh removes the previous entry before requesting metadata; failure returns its diagnostic and replaces success with a short error record, without stale release fallback. A cache write failure does not discard a successfully retrieved result; a failed invalidation reports an error instead of claiming fresh data.
+
+Values are versioned plain arrays, with repository identity and absolute creation/expiry times. Cached successes reuse the reader's candidate validation (flags, dates, IDs, duplicates, bounded list and deterministic order); malformed or expired entries are misses. Tag, installed-version, asset and ZIP validation still apply downstream. No installed activation/version state or package-validation result is cached.
+
+WordPress site transients provide ordinary option-backed storage on single-site and network storage on Multisite, or the configured object-cache backend. Keys hash canonical repository identity, API version, retrieval policy and site/network scope. Network ID is explicit because `site-transient` is a global object-cache group: sites in the same network share results, while different networks cannot share entries even with a global persistent cache. Expiration is a maximum, not a promise of retention; early eviction triggers a normal refresh. Bump the cache schema when changing stored-format or relevant eligibility semantics.
+
+Cold/forced refreshes and invalidation use a per-repository zero-wait database advisory lock, separate from registry mutation locks. After acquisition, refresh local transient option snapshots (or force a backend cache read), then recheck for another writer's completed entry. Busy, unavailable or nested refreshes fail without redundant requests. Release happens in `finally`, including after exceptions. An invalidation that succeeds cannot be repopulated by a fetch that was already holding this same lock; contention returns a busy error instead of racing it. Like registry locking, this requires a stable primary MySQL/MariaDB connection; custom routers/failover and unusual persistent cache backends need integration verification.
+
+The wrapper is explicitly loaded and remains outside admin page views and native update hooks. Future Check Now handlers must enforce capabilities/nonces before force or invalidation, and native update integration must refresh WordPress's own update metadata separately. Removing a registration does not require deleting public metadata caches: they are repository-scoped, contain no installed identity, and expire independently. Backend manual bypass is tested; no Check Now button or custom scheduler is introduced here. [WordPress 6.6 transient implementation](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-includes/option.php) defines the backend behavior.
+
 ## Development checks
 
 Run from the plugin directory:
@@ -181,6 +195,7 @@ php tests/stable-releases.php
 php tests/release-tag.php
 php tests/version-comparison.php
 php tests/release-asset.php
+php tests/cached-releases.php
 php tests/unsupported-environment.php wordpress
 git diff --check
 ```
