@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Cache public metadata, never installed state or package-validation results.
  */
 final class Cached_Releases {
-	public const SCHEMA_VERSION = 1;
+	public const SCHEMA_VERSION = 2;
 	public const SUCCESS_TTL    = 43200;
 	public const FAILURE_TTL    = 300;
 	private const MAX_BACKOFF   = 86400;
@@ -29,8 +29,9 @@ final class Cached_Releases {
 	public function __construct( private readonly Stable_Releases $reader = new Stable_Releases() ) {}
 
 	/**
-	 * Get revalidated metadata, or bypass both success and failure cache explicitly.
+	 * Get revalidated metadata, or bypass ordinary cached results explicitly.
 	 *
+	 * Force and invalidation preserve active server-directed cooldowns.
 	 * A forced refresh never returns stale data after a failed request. Callers
 	 * exposing force/invalidate through HTTP must enforce capabilities and nonces.
 	 *
@@ -40,11 +41,14 @@ final class Cached_Releases {
 	 */
 	public function get( Repository $repository, bool $force = false ): array|WP_Error {
 		$key = $this->key( $repository );
-		if ( ! $force ) {
-			$cached = $this->read( $key, $repository );
-			if ( null !== $cached ) {
-				return $cached;
-			}
+		$cached = $this->cached_result( $key, $repository, $force );
+		if ( null !== $cached ) {
+			return $cached;
+		}
+
+		$cooldown = $this->read_cooldown( $key );
+		if ( $cooldown instanceof WP_Error ) {
+			return $cooldown;
 		}
 
 		return $this->locked(
@@ -52,11 +56,14 @@ final class Cached_Releases {
 			function () use ( $key, $repository, $force ) {
 				// Another request may have finished while this one was acquiring.
 				$this->refresh_local_cache( $key );
-				if ( ! $force ) {
-					$cached = $this->read( $key, $repository );
-					if ( null !== $cached ) {
-						return $cached;
-					}
+				$cached = $this->cached_result( $key, $repository, $force );
+				if ( null !== $cached ) {
+					return $cached;
+				}
+				$this->refresh_local_cache( $key . '_cooldown' );
+				$cooldown = $this->read_cooldown( $key );
+				if ( $cooldown instanceof WP_Error ) {
+					return $cooldown;
 				}
 				$cleared = $this->clear( $key );
 				if ( $cleared instanceof WP_Error ) {
@@ -72,14 +79,15 @@ final class Cached_Releases {
 				if ( $result instanceof WP_Error ) {
 					$data = $result->get_error_data();
 					$safe = array();
-					foreach ( array( 'http_status', 'retry_after', 'transport_code' ) as $field ) {
-						if ( is_array( $data ) && isset( $data[ $field ] ) && ( is_int( $data[ $field ] ) || is_string( $data[ $field ] ) ) ) {
+					foreach ( array( 'http_status', 'retry_after', 'retry_at', 'transport_code', 'retryable' ) as $field ) {
+						if ( is_array( $data ) && isset( $data[ $field ] ) && ( is_int( $data[ $field ] ) || is_string( $data[ $field ] ) || is_bool( $data[ $field ] ) ) ) {
 							$safe[ $field ] = $data[ $field ];
 						}
 					}
 					$record['kind']  = 'error';
 					$record['error'] = array( 'code' => (string) $result->get_error_code(), 'message' => $result->get_error_message(), 'data' => $safe );
 					$ttl             = $this->failure_ttl( $safe );
+					$this->remember_cooldown( $key, $record['error'] );
 				} else {
 					$record['kind']     = 'success';
 					$record['releases'] = $result;
@@ -93,7 +101,7 @@ final class Cached_Releases {
 	}
 
 	/**
-	 * Remove only this repository's success/error entry in the current scope.
+	 * Remove this repository's metadata/error cache, preserving active cooldowns.
 	 *
 	 * Uses the refresh lock so an in-flight fetch cannot repopulate after success.
 	 *
@@ -104,8 +112,16 @@ final class Cached_Releases {
 		$key = $this->key( $repository );
 		return $this->locked(
 			$key,
-			function () use ( $key ) {
+			function () use ( $key, $repository ) {
 				$this->refresh_local_cache( $key );
+				$this->refresh_local_cache( $key . '_cooldown' );
+				$known = $this->read( $key, $repository );
+				if ( $known instanceof WP_Error && $this->active_retry( $known ) && null === $this->read_cooldown( $key ) ) {
+					$error = array( 'code' => $known->get_error_code(), 'message' => $known->get_error_message(), 'data' => $known->get_error_data() );
+					if ( ! $this->remember_cooldown( $key, $error ) ) {
+						return new WP_Error( 'github_updater_release_cooldown_write_failed', __( 'The GitHub retry deadline could not be preserved. The cache was not cleared; wait before trying again.', 'wordpress-github-updater' ) );
+					}
+				}
 				return $this->clear( $key );
 			}
 		);
@@ -145,6 +161,63 @@ final class Cached_Releases {
 			return new WP_Error( $error['code'], $error['message'], $error['data'] );
 		}
 		return null;
+	}
+
+	/** @param string $key Scoped key. @param Repository $repository Identity. @param bool $force Manual bypass. @return array<mixed>|WP_Error|null */
+	private function cached_result( string $key, Repository $repository, bool $force ): array|WP_Error|null {
+		$cached = $this->read( $key, $repository );
+		if ( ! $force ) {
+			return $cached;
+		}
+		return $cached instanceof WP_Error && $this->active_retry( $cached ) ? $cached : null;
+	}
+
+	/** @param WP_Error $error Cached or current server error. @return bool */
+	private function active_retry( WP_Error $error ): bool {
+		$data = $error->get_error_data();
+		return in_array( $error->get_error_code(), array( 'github_updater_api_rate_limited', 'github_updater_api_unavailable' ), true )
+			&& is_array( $data ) && isset( $data['retry_at'] ) && is_int( $data['retry_at'] )
+			&& $data['retry_at'] > time() && $data['retry_at'] - time() <= self::MAX_BACKOFF;
+	}
+
+	/** @param string $key Scoped key. @param array<string, mixed> $error Plain error record. @return bool */
+	private function remember_cooldown( string $key, array $error ): bool {
+		$created = time();
+		$until   = $error['data']['retry_at'] ?? null;
+		if ( ! is_int( $until ) || $until <= $created || $until - $created > self::MAX_BACKOFF ) {
+			return false;
+		}
+		$record = array( 'created_at' => $created, 'until' => $until, 'error' => $error );
+		return set_site_transient( $key . '_cooldown', $record, $until - $created ) || get_site_transient( $key . '_cooldown' ) === $record;
+	}
+
+	/**
+	 * Server-directed waits are separate from invalidatable metadata records.
+	 *
+	 * @param string $key Scoped repository key.
+	 * @return WP_Error|null
+	 */
+	private function read_cooldown( string $key ): ?WP_Error {
+		$record = get_site_transient( $key . '_cooldown' );
+		if (
+			! is_array( $record ) || ! isset( $record['created_at'], $record['until'], $record['error'] )
+			|| ! is_int( $record['created_at'] ) || ! is_int( $record['until'] )
+			|| $record['created_at'] > time() || $record['until'] <= time()
+			|| $record['until'] <= $record['created_at'] || $record['until'] - $record['created_at'] > self::MAX_BACKOFF
+			|| ! is_array( $record['error'] )
+		) {
+			return null;
+		}
+		$error = $record['error'];
+		if (
+			! isset( $error['code'], $error['message'], $error['data'] )
+			|| ! in_array( $error['code'], array( 'github_updater_api_rate_limited', 'github_updater_api_unavailable' ), true )
+			|| ! is_string( $error['message'] ) || ! is_array( $error['data'] )
+			|| ( $error['data']['retry_at'] ?? null ) !== $record['until']
+		) {
+			return null;
+		}
+		return new WP_Error( $error['code'], $error['message'], $error['data'] );
 	}
 
 	/** @param array<mixed> $data Safe error hints. @return int */

@@ -89,7 +89,20 @@ check_cache($reader->get($repository,true)[0]['id']===3,'Manual refresh bypasses
 $mode='rate';
 cache_error($reader->get($repository,true),'github_updater_api_rate_limited');
 check_cache($ttls[$key]===3600,'Longer bounded retry hint controls failure TTL');
-$mode='success';$now+=3600;
+$mode='success';$before=count($requests);
+cache_error($reader->get($repository,true),'github_updater_api_rate_limited');
+check_cache(count($requests)===$before,'Manual refresh respects active server cooldown');
+// If the separate marker is evicted, the metadata error is still authoritative.
+unset($cache[$key.'_cooldown']);
+cache_error($reader->get($repository,true),'github_updater_api_rate_limited');
+$fail_set=true;
+cache_error($reader->invalidate($repository),'github_updater_release_cooldown_write_failed');
+$fail_set=false;
+check_cache(true===$reader->invalidate($repository),'Metadata invalidation succeeds during cooldown');
+cache_error($reader->get($repository,true),'github_updater_api_rate_limited');
+cache_error($reader->get($repository),'github_updater_api_rate_limited');
+check_cache(count($requests)===$before,'Invalidation cannot erase known server retry deadline');
+$now+=3600;
 $reader->get($repository);
 
 // Malformed cache entries are misses and cannot bypass eligibility validation.
@@ -98,7 +111,7 @@ foreach(array('scalar','schema','repository','time','future','flags','date','dup
     $cache[$key]=$valid;
     if($corruption==='scalar'){$cache[$key]='invalid';}
     if($corruption==='future'){$cache[$key]['created_at']=$now+1;}
-    if($corruption==='schema'){$cache[$key]['schema_version']=2;}
+    if($corruption==='schema'){$cache[$key]['schema_version']=Cached_Releases::SCHEMA_VERSION+1;}
     if($corruption==='repository'){$cache[$key]['repository_url']='https://github.com/other/repo';}
     if($corruption==='time'){$cache[$key]['expires_at']++;}
     if($corruption==='flags'){$cache[$key]['releases'][0]['prerelease']=true;}

@@ -111,9 +111,9 @@ Manual browser checks: register a test directory-based plugin using its actual p
 
 Requests use TLS verification, a 10-second timeout, a 1 MiB response-body limit (with a one-byte overflow check), an explicit JSON media type and API version `2022-11-28`. The static user agent does not disclose the site's URL. Responses request identity encoding, require JSON content type and the expected object/list root, and limit JSON nesting. Repository metadata must identify the selected repository and explicitly describe it as public. The API version is [currently supported by GitHub](https://docs.github.com/en/rest/about-the-rest-api/api-versions).
 
-Metadata redirects are refused rather than followed, including same-host redirects. Repository moves therefore require review of the registered URL. HTTP/transport errors, malformed metadata, oversized bodies, private/mismatched repository identity and basic rate-limit responses return safe errors without reflecting remote body text. A bounded numeric Retry-After hint may be returned as error data; the client does not sleep or retry. Missing and private resources cannot reliably be distinguished from a 404 alone.
+Metadata redirects are refused rather than followed, including same-host redirects. Repository moves therefore require review of the registered URL. HTTP/transport errors, malformed metadata, oversized bodies and private/mismatched repository identity return safe errors without reflecting remote body text. Timeouts, access denials, retired resources, temporary service failures and rate limits have distinct diagnostics. Retry guidance is described below; the client does not sleep or retry. Missing and private resources cannot reliably be distinguished from a 404 alone.
 
-The transport is not wired into page views, registration or native update checks. It does not cache, scan pages, select a stable release, compare versions, download ZIPs or install anything. Release eligibility, asset validation, caching and failure backoff remain separate Milestone 3 tasks. Future consumers must add caching before routine automatic checks. GitHub HTTP arguments were checked against [WordPress 6.6 HTTP source](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-includes/class-wp-http.php).
+The transport is not wired into page views, registration or native update checks. It does not cache, scan pages, select a stable release, compare versions, download ZIPs or install anything. Release eligibility, asset validation and caching/backoff are separate components; this transport does not implement their policies. Future consumers must add caching before routine automatic checks. GitHub HTTP arguments were checked against [WordPress 6.6 HTTP source](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-includes/class-wp-http.php).
 
 The user supplied [wordpress-schedule-post-updates](https://github.com/brock10t/wordpress-schedule-post-updates) as a public test plugin. A read-only native WordPress HTTP check observed `v1.0.0` and an uploaded `wordpress-schedule-post-updates.zip` on 2026-11-22. No package was downloaded or validated, and no installability is asserted. This repository is unrelated to the updater's still-unconfigured built-in self-update source. Automated transport tests use mocked responses and do not depend on this live release remaining unchanged.
 
@@ -161,9 +161,9 @@ A native metadata-only check identified the existing test release's `wordpress-s
 
 ## Release caching and invalidation
 
-`GitHub\Cached_Releases` wraps the uncached `Stable_Releases` reader. `get($repository)` returns a revalidated completed candidate list or `WP_Error`. `get($repository, true)` performs an explicit manual refresh, bypassing both successful entries and failure backoff. `invalidate($repository)` removes that repository's current-scope success/error entry and returns `true` (including when absent) or `WP_Error`.
+`GitHub\Cached_Releases` wraps the uncached `Stable_Releases` reader. `get($repository)` returns a revalidated completed candidate list or `WP_Error`. `get($repository, true)` performs an explicit manual refresh, bypassing successful entries and ordinary failure backoff while honoring recorded server cooldowns. `invalidate($repository)` removes that repository's current-scope metadata/error entry and returns `true` (including when absent) or `WP_Error`. It preserves an active server-directed cooldown in a separate transient.
 
-Successful results, including an empty candidate list, have a **12-hour** lifetime. Failures have a **five-minute** minimum backoff; an existing numeric Retry-After hint can extend it up to one day. No sleeping or automatic retry loop is added. Forced refresh is for authorized user actions, never routine update checks. A forced refresh removes the previous entry before requesting metadata; failure returns its diagnostic and replaces success with a short error record, without stale release fallback. A cache write failure does not discard a successfully retrieved result; a failed invalidation reports an error instead of claiming fresh data.
+Successful results, including an empty candidate list, have a **12-hour** lifetime. Failures have a **five-minute** minimum backoff; an existing numeric Retry-After hint can extend it up to one day. No sleeping or automatic retry loop is added. Forced refresh is for authorized user actions, never routine update checks, and cannot bypass a known active rate-limit or service Retry-After deadline. A forced refresh removes the previous entry before requesting metadata; failure returns its diagnostic and replaces success with a short error record, without stale release fallback. A cache write failure does not discard a successfully retrieved result; a failed invalidation reports an error instead of claiming fresh data.
 
 Values are versioned plain arrays, with repository identity and absolute creation/expiry times. Cached successes reuse the reader's candidate validation (flags, dates, IDs, duplicates, bounded list and deterministic order); malformed or expired entries are misses. Tag, installed-version, asset and ZIP validation still apply downstream. No installed activation/version state or package-validation result is cached.
 
@@ -172,6 +172,29 @@ WordPress site transients provide ordinary option-backed storage on single-site 
 Cold/forced refreshes and invalidation use a per-repository zero-wait database advisory lock, separate from registry mutation locks. After acquisition, refresh local transient option snapshots (or force a backend cache read), then recheck for another writer's completed entry. Busy, unavailable or nested refreshes fail without redundant requests. Release happens in `finally`, including after exceptions. An invalidation that succeeds cannot be repopulated by a fetch that was already holding this same lock; contention returns a busy error instead of racing it. Like registry locking, this requires a stable primary MySQL/MariaDB connection; custom routers/failover and unusual persistent cache backends need integration verification.
 
 The wrapper is explicitly loaded and remains outside admin page views and native update hooks. Future Check Now handlers must enforce capabilities/nonces before force or invalidation, and native update integration must refresh WordPress's own update metadata separately. Removing a registration does not require deleting public metadata caches: they are repository-scoped, contain no installed identity, and expire independently. Backend manual bypass is tested; no Check Now button or custom scheduler is introduced here. [WordPress 6.6 transient implementation](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-includes/option.php) defines the backend behavior.
+
+## HTTP failures, timeouts and rate limits
+
+The client classifies failures without automatic retries:
+
+| Situation | Diagnostic |
+| --- | --- |
+| Recognized local timeout or HTTP 408 | `github_updater_api_timeout` |
+| Other transport failure | `github_updater_api_request_failed` |
+| HTTP 401 or non-rate-limit 403 | `github_updater_api_access_denied` |
+| HTTP 404 | `github_updater_api_not_found` (missing and private resources remain indistinguishable) |
+| HTTP 410 | `github_updater_api_resource_gone` |
+| HTTP 429 or recognized primary/secondary-limit 403 | `github_updater_api_rate_limited` |
+| HTTP 5xx | `github_updater_api_unavailable` |
+| Other unsuccessful HTTP statuses | `github_updater_api_http_error` |
+
+WordPress wraps Requests transport exceptions in `http_request_failed`, so timeout recognition uses known local timeout wording/cURL code 28; unfamiliar transport messages safely fall back to the generic connectivity diagnostic. Raw transport details and error response bodies are never used as user-facing messages.
+
+Rate classification uses strict header values and a small, valid JSON error message for known GitHub secondary-limit/abuse wording. A bare 403 is not assumed to be a rate limit. Retry-After accepts bounded nonnegative seconds or a valid canonical GMT HTTP date. Exhausted primary quota also considers the UTC epoch in `X-RateLimit-Reset`. For rate limits, use the longer valid hint with at least a one-minute wait; delays are capped at one day. Malformed/array/negative/exponent headers are ignored. `retry_after`, absolute `retry_at` and `retryable` are safe diagnostic data, not instructions to launch an automatic retry. HTTP 5xx honors a valid positive Retry-After too. The policy follows [GitHub's rate-limit retry guidance](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#handle-rate-limit-errors-appropriately).
+
+Cache schema v2 keeps a separate scoped cooldown marker. Force and invalidation preserve the deadline; if the marker is evicted but the metadata error still records the wait, force honors it and invalidation restores it before clearing metadata. If that restoration fails, invalidation returns an error and retains the known metadata error. After the deadline, explicit refresh can bypass the remaining ordinary five-minute error cache. These are repository/network-scoped transient records, not global IP-quota tracking; early eviction of all recorded state and unrelated applications/networks sharing an egress IP are outside that coordination. Cache schema v1 entries are ignored and expire on their existing schedules.
+
+All failure scenarios are tested with mocked responses; tests do not deliberately exhaust GitHub limits or require a new managed-plugin version. Error-state presentation and final integration remain separate tasks.
 
 ## Development checks
 
@@ -191,6 +214,7 @@ php tests/registry.php
 php tests/registry-lock.php
 php tests/admin.php
 php tests/api-client.php
+php tests/api-resilience.php
 php tests/stable-releases.php
 php tests/release-tag.php
 php tests/version-comparison.php

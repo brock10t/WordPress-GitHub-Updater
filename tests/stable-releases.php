@@ -10,6 +10,7 @@ require dirname(__DIR__) . '/includes/github/class-stable-releases.php';
 class WP_Error {
     public function __construct(public string $code, public string $message, public mixed $data = null) {}
     public function get_error_code() { return $this->code; }
+    public function get_error_message() { return $this->message; }
 }
 function __($text, $domain) { return $text; }
 function wp_remote_retrieve_response_code($response) { return $response['response']['code'] ?? ''; }
@@ -62,7 +63,7 @@ check_release($reader->get($repository)===array(),'No releases is an empty compl
 setup_releases(array(1=>array($draft,$prerelease,$unpublished)));
 check_release($reader->get($repository)===array(),'No stable published candidates');
 setup_releases(array(1=>array(release_fixture(1)),2=>new WP_Error('http_request_failed','timeout')));
-release_error($reader->get($repository),'github_updater_api_request_failed');
+release_error($reader->get($repository),'github_updater_api_timeout');
 check_release(count($requests)===3,'Later request failure returns no partial result or retries');
 setup_releases(array(1=>array(release_fixture(1)),2=>array(release_fixture(1))));
 release_error($reader->get($repository),'github_updater_release_scan_changed');

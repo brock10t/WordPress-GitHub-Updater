@@ -9,6 +9,7 @@ require dirname(__DIR__) . '/includes/github/class-api-client.php';
 class WP_Error {
     public function __construct(public string $code, public string $message, public mixed $data = null) {}
     public function get_error_code() { return $this->code; }
+    public function get_error_message() { return $this->message; }
     public function get_error_data() { return $this->data; }
 }
 function __($text, $domain) { return $text; }
@@ -59,8 +60,8 @@ foreach (array(
     array(api_response('',403,array('x-ratelimit-remaining'=>'0')), 'github_updater_api_rate_limited'),
     array(api_response('',403,array('retry-after'=>'60')), 'github_updater_api_rate_limited'),
     array(api_response('',429), 'github_updater_api_rate_limited'),
-    array(api_response('',403,array('x-ratelimit-remaining'=>array('bad'))), 'github_updater_api_http_error'),
-    array(api_response('',500), 'github_updater_api_http_error'),
+    array(api_response('',403,array('x-ratelimit-remaining'=>array('bad'))), 'github_updater_api_access_denied'),
+    array(api_response('',500), 'github_updater_api_unavailable'),
     array(api_response('',204), 'github_updater_api_http_error'),
     array(api_response('<script>bad</script>'), 'github_updater_api_invalid_response'),
     array(api_response('[] trailing'), 'github_updater_api_invalid_response'),
