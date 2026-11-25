@@ -215,6 +215,7 @@ php tests/registry-lock.php
 php tests/admin.php
 php tests/api-client.php
 php tests/api-resilience.php
+php tests/check-state.php
 php tests/stable-releases.php
 php tests/release-tag.php
 php tests/version-comparison.php
@@ -243,6 +244,12 @@ In disposable WordPress environments, verify:
 4. Confirm the admin screen performs no GitHub requests or update/install actions, and that plugin initialization and a read-only page view do not create registry records. Test admin registration/removal separately with fixture cleanup.
 
 Later logic tests will cover repository normalization, versions, releases, registry validation and package identity with mocked HTTP. Installation, replacement, rollback and self-updates require disposable single-site and Multisite integration environments. Never test destructive update behavior on production.
+
+## Check outcome presentation
+
+`GitHub\\Check_State` is an explicitly loaded, unhooked presentation adapter. `from_error($error)` maps known GitHub, header, version, asset and cache errors to fixed translated titles, descriptions and next steps. Unknown errors receive a conservative fallback; remote messages, arbitrary data and package URLs are excluded. Keep the original `WP_Error` for diagnostics and escape view text when rendering.
+
+Cooldown states retain bounded retry deadlines. `retry_suggested_now()` is only a display hint: backend cooldowns, capabilities and nonces still govern requests. No retry is scheduled. `no_releases()` is reserved for a completed validated empty scan; `no_update()` requires a completed successful comparison. Failed checks never become either successful outcome. This adapter does not retrieve releases, establish package eligibility or add administration controls.
 
 ## Release and trust boundaries
 
