@@ -1,6 +1,6 @@
 # 10T GitHub Updater
 
-A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current milestone provides a native registration/removal screen, registry validation and coordinated storage. GitHub API release checks, installation and updates will arrive in later milestones.
+A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current administration screen supports explicit registration and removal. Internal components provide bounded REST retrieval, stable release candidates, version comparison, asset identification and network-aware metadata caching. Metadata-only newer-release selection is available internally. Native update offers, package validation and installation remain for later tasks.
 
 Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation is required. There are no mandatory third-party dependencies and production does not require Composer.
 
@@ -105,6 +105,97 @@ The table shows the installed version, canonical basename, repository link and c
 
 Manual browser checks: register a test directory-based plugin using its actual public repository; try unchecked/checked pending registration, an invalid URL and conflicting header; refresh after submission; remove only its registration and verify the plugin remains installed/active as before. On a disposable Multisite installation, repeat from Network Admin and confirm site-admin/unauthorized attempts fail and a second site sees the same network registry. Real browser and Multisite checks remain pending; the native single-site integration verified menus, handlers, nonce checks, redirects, rendering, cross-request persistence and cleanup programmatically.
 
+## GitHub REST transport
+
+`GitHub\Api_Client` uses WordPress's `wp_safe_remote_get()` for two internally constructed endpoints on `https://api.github.com`: repository metadata and one paginated releases list. Call `get_repository($repository)` to confirm a matching public repository, or `get_releases_page($repository, $page = 1, $per_page = 100)` for raw release entries. Methods return decoded arrays or `WP_Error`; no arbitrary URL or endpoint can be supplied. Raw release entries are not eligible releases or trusted download instructions yet.
+
+Requests use TLS verification, a 10-second timeout, a 1 MiB response-body limit (with a one-byte overflow check), an explicit JSON media type and API version `2022-11-28`. The static user agent does not disclose the site's URL. Responses request identity encoding, require JSON content type and the expected object/list root, and limit JSON nesting. Repository metadata must identify the selected repository and explicitly describe it as public. The API version is [currently supported by GitHub](https://docs.github.com/en/rest/about-the-rest-api/api-versions).
+
+Metadata redirects are refused rather than followed, including same-host redirects. Repository moves therefore require review of the registered URL. HTTP/transport errors, malformed metadata, oversized bodies and private/mismatched repository identity return safe errors without reflecting remote body text. Timeouts, access denials, retired resources, temporary service failures and rate limits have distinct diagnostics. Retry guidance is described below; the client does not sleep or retry. Missing and private resources cannot reliably be distinguished from a 404 alone.
+
+The transport is not wired into page views, registration or native update checks. It does not cache, scan pages, select a stable release, compare versions, download ZIPs or install anything. Release eligibility, asset validation and caching/backoff are separate components; this transport does not implement their policies. Future consumers must add caching before routine automatic checks. GitHub HTTP arguments were checked against [WordPress 6.6 HTTP source](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-includes/class-wp-http.php).
+
+The user supplied [wordpress-schedule-post-updates](https://github.com/brock10t/wordpress-schedule-post-updates) as a public test plugin. A read-only native WordPress HTTP check observed `v1.0.0` and an uploaded `wordpress-schedule-post-updates.zip` on 2026-11-22. No package was downloaded or validated, and no installability is asserted. This repository is unrelated to the updater's still-unconfigured built-in self-update source. Automated transport tests use mocked responses and do not depend on this live release remaining unchanged.
+
+## Stable published-release retrieval
+
+`GitHub\Stable_Releases::get($repository)` first verifies matching public repository metadata, then scans release-list pages through `Api_Client`. It returns an array of stable published candidates or a `WP_Error`. Empty completed results mean no candidates. It is explicitly loaded by consumers and is not wired into the administration screen or native update hooks yet.
+
+The scan requests 100 entries per page, at most five pages plus the repository check. It continues until an empty page, so a short page does not hide later entries. An empty page must occur within that bound: exhausting all five nonempty pages returns `github_updater_release_scan_incomplete`, even if some candidates were found. Requests that fail on later pages also return an error, never a partial result. No Link URL, `/latest` endpoint, branch, commit or source-archive endpoint is followed. Pagination is not a transactional GitHub snapshot; repeated candidate IDs are detected and return `github_updater_release_scan_changed` rather than being silently deduplicated.
+
+Both `draft` and `prerelease` must be explicit booleans. Either true excludes the entry; explicit null `published_at` also excludes it. Candidate IDs must be positive integers, tags nonempty strings without controls, and publication dates valid UTC GitHub timestamps. Missing or malformed required metadata fails the scan rather than hiding a potentially newer candidate. Results sort by publication time descending, then release ID descending for deterministic ties; neither API order nor tag text determines that ordering.
+
+This step establishes publication/flag eligibility only. Raw tag text, asset metadata and other fields remain untrusted. A release incorrectly marked stable with a prerelease-shaped tag will still need the upcoming tag validator; these candidate arrays are not installable update metadata. Numeric version selection, package assets, caching and backoff remain later tasks. The live test repository's existing `v1.0.0` is sufficient for this step; keep it as the baseline until native update integration is ready for an upgrade test.
+
+## Release-tag normalization
+
+`GitHub\Release_Tag::normalize($tag)` returns a numeric version string or `github_updater_unsupported_release_tag` as a `WP_Error`. Accepted tags contain at least two dot-separated numeric components, optionally preceded by one lowercase `v`. Examples: `v1.0.0` becomes `1.0.0`; `1.2`, `1.2.3.4` and numeric calendar versions retain their components.
+
+Each component is `0` or a nonzero-leading integer of up to nine digits, which fits signed 32-bit PHP integers. The normalized version is limited to 128 characters. Leading zeros, whitespace/controls, uppercase/repeated prefixes, labels, branch names, signs and prerelease/build suffixes are rejected. For v1, use numeric stable tags without build metadata. A prerelease-shaped tag is rejected even if a release author incorrectly marks it `prerelease: false`.
+
+Normalization does not trim, pad components, remove trailing zeros or strip qualifiers to manufacture a stable version. Thus `1.2` remains `1.2` and `1.2.0` remains `1.2.0`; the comparison helper pads only its private inputs so these versions compare as equivalent. Consumers must retain the original GitHub `tag_name` for asset paths and diagnostics; the normalized version is only for version semantics.
+
+The helper is explicitly loaded by consumers and is not yet combined with retrieval into an update selector. Stable_Releases still returns raw candidates. Future selection must apply this validator before comparing versions, then require a validated uploaded asset. No update offers, downloads or installed-header version changes are introduced by this step.
+
+## Version comparison
+
+`GitHub\Version_Comparison::compare($release_tag, $installed_version)` returns `-1` for an older release, `0` for an equivalent version, `1` for a newer release, or a `WP_Error`. Check for an error before using the result. Both the original release tag and installed `Version` header must satisfy the supported stable numeric format, including its optional lowercase `v`, length and digit bounds.
+
+The helper normalizes both strings, pads the shorter numeric component list with zeros, then uses PHP's `version_compare()`. Thus `v1.2`, `1.2.0` and `1.2.0.0` compare equal; `1.10` is newer than `1.9`; additional nonzero components remain significant. Padding is internal and does not rewrite the original tag, displayed installed version or plugin source.
+
+Unsupported release tags retain `github_updater_unsupported_release_tag`; unsupported installed versions return `github_updater_unsupported_installed_version`. Empty, unrecognized, qualified or otherwise unsupported installed values never default to zero and cannot manufacture a newer-release result. Version headers containing prerelease qualifiers are outside the current supported comparison format.
+
+This is a pure, explicitly loaded helper. It does not pick a release from a list, prove publication, validate package assets, contact GitHub or write any state. Future update selection must require stable publication/flags, valid versions and a positive comparison result together with the correct validated uploaded ZIP; equal/older releases must not be offered as upgrades. No managed-plugin version bump is needed until native update integration can test an actual upgrade.
+
+## Required ZIP asset identification
+
+`GitHub\Release_Asset::select($release, $registration)` returns an immutable metadata pointer (`id`, `name`, declared `size`, `api_url`, `download_url`) or a `WP_Error`. It examines only uploaded `assets`; automatically generated `zipball_url`/`tarball_url` archives are never fallback packages. The required name is the registration's exact `plugin_slug.zip`, including case, regardless of repository or main-file name.
+
+Exactly one asset must match. Missing or duplicate filenames, malformed asset lists, missing names, unfinished upload state, nonpositive/noninteger ID or size, and invalid URL fields fail closed. Other well-named assets such as checksums do not need ZIP metadata because they are not selected. Only validated pointer fields are returned; unvalidated extra metadata is not promoted into a trusted result.
+
+Both URLs are pinned to literal HTTPS GitHub hosts and the registered repository identity. The metadata endpoint must be `https://api.github.com/repos/owner/repository/releases/assets/ID`; the browser URL must be `https://github.com/owner/repository/releases/download/ORIGINAL_TAG/EXPECTED_FILENAME`. Owner/repository letter-case differences are permitted, but the tag, filename and encoded suffix must match exactly. No credentials, ports, queries, fragments, arbitrary endpoints or redirect destinations are accepted. A raw `v1.0.0` tag stays `v1.0.0` in the download path even though its comparison version is `1.0.0`. Endpoint shapes were checked against [GitHub release-asset documentation](https://docs.github.com/en/rest/releases/assets#get-a-release-asset).
+
+This selects metadata, not an installable archive. Publication eligibility, installed-version comparison and actual package validation remain separate gates. Declared size and MIME type do not establish ZIP integrity; MIME is not used to select a package. A future downloader must impose actual byte/resource limits, revalidate metadata as appropriate and validate every download redirect before archive inspection. This helper performs no requests or writes and does not expose package metadata to WordPress's updater yet.
+
+A native metadata-only check identified the existing test release's `wordpress-schedule-post-updates.zip` (declared 10,987 bytes) using an explicit in-memory test registration. It did not infer or register an installed main-file basename, download the archive, or validate its contents. Keep the test plugin at `v1.0.0` until an actual update test is ready.
+
+## Release caching and invalidation
+
+`GitHub\Cached_Releases` wraps the uncached `Stable_Releases` reader. `get($repository)` returns a revalidated completed candidate list or `WP_Error`. `get($repository, true)` performs an explicit manual refresh, bypassing successful entries and ordinary failure backoff while honoring recorded server cooldowns. `invalidate($repository)` removes that repository's current-scope metadata/error entry and returns `true` (including when absent) or `WP_Error`. It preserves an active server-directed cooldown in a separate transient.
+
+Successful results, including an empty candidate list, have a **12-hour** lifetime. Failures have a **five-minute** minimum backoff; an existing numeric Retry-After hint can extend it up to one day. No sleeping or automatic retry loop is added. Forced refresh is for authorized user actions, never routine update checks, and cannot bypass a known active rate-limit or service Retry-After deadline. A forced refresh removes the previous entry before requesting metadata; failure returns its diagnostic and replaces success with a short error record, without stale release fallback. A cache write failure does not discard a successfully retrieved result; a failed invalidation reports an error instead of claiming fresh data.
+
+Values are versioned plain arrays, with repository identity and absolute creation/expiry times. Cached successes reuse the reader's candidate validation (flags, dates, IDs, duplicates, bounded list and deterministic order); malformed or expired entries are misses. Tag, installed-version, asset and ZIP validation still apply downstream. No installed activation/version state or package-validation result is cached.
+
+WordPress site transients provide ordinary option-backed storage on single-site and network storage on Multisite, or the configured object-cache backend. Keys hash canonical repository identity, API version, retrieval policy and site/network scope. Network ID is explicit because `site-transient` is a global object-cache group: sites in the same network share results, while different networks cannot share entries even with a global persistent cache. Expiration is a maximum, not a promise of retention; early eviction triggers a normal refresh. Bump the cache schema when changing stored-format or relevant eligibility semantics.
+
+Cold/forced refreshes and invalidation use a per-repository zero-wait database advisory lock, separate from registry mutation locks. After acquisition, refresh local transient option snapshots (or force a backend cache read), then recheck for another writer's completed entry. Busy, unavailable or nested refreshes fail without redundant requests. Release happens in `finally`, including after exceptions. An invalidation that succeeds cannot be repopulated by a fetch that was already holding this same lock; contention returns a busy error instead of racing it. Like registry locking, this requires a stable primary MySQL/MariaDB connection; custom routers/failover and unusual persistent cache backends need integration verification.
+
+The wrapper is explicitly loaded and remains outside admin page views and native update hooks. Future Check Now handlers must enforce capabilities/nonces before force or invalidation, and native update integration must refresh WordPress's own update metadata separately. Removing a registration does not require deleting public metadata caches: they are repository-scoped, contain no installed identity, and expire independently. Backend manual bypass is tested; no Check Now button or custom scheduler is introduced here. [WordPress 6.6 transient implementation](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-includes/option.php) defines the backend behavior.
+
+## HTTP failures, timeouts and rate limits
+
+The client classifies failures without automatic retries:
+
+| Situation | Diagnostic |
+| --- | --- |
+| Recognized local timeout or HTTP 408 | `github_updater_api_timeout` |
+| Other transport failure | `github_updater_api_request_failed` |
+| HTTP 401 or non-rate-limit 403 | `github_updater_api_access_denied` |
+| HTTP 404 | `github_updater_api_not_found` (missing and private resources remain indistinguishable) |
+| HTTP 410 | `github_updater_api_resource_gone` |
+| HTTP 429 or recognized primary/secondary-limit 403 | `github_updater_api_rate_limited` |
+| HTTP 5xx | `github_updater_api_unavailable` |
+| Other unsuccessful HTTP statuses | `github_updater_api_http_error` |
+
+WordPress wraps Requests transport exceptions in `http_request_failed`, so timeout recognition uses known local timeout wording/cURL code 28; unfamiliar transport messages safely fall back to the generic connectivity diagnostic. Raw transport details and error response bodies are never used as user-facing messages.
+
+Rate classification uses strict header values and a small, valid JSON error message for known GitHub secondary-limit/abuse wording. A bare 403 is not assumed to be a rate limit. Retry-After accepts bounded nonnegative seconds or a valid canonical GMT HTTP date. Exhausted primary quota also considers the UTC epoch in `X-RateLimit-Reset`. For rate limits, use the longer valid hint with at least a one-minute wait; delays are capped at one day. Malformed/array/negative/exponent headers are ignored. `retry_after`, absolute `retry_at` and `retryable` are safe diagnostic data, not instructions to launch an automatic retry. HTTP 5xx honors a valid positive Retry-After too. The policy follows [GitHub's rate-limit retry guidance](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#handle-rate-limit-errors-appropriately).
+
+Cache schema v2 keeps a separate scoped cooldown marker. Force and invalidation preserve the deadline; if the marker is evicted but the metadata error still records the wait, force honors it and invalidation restores it before clearing metadata. If that restoration fails, invalidation returns an error and retains the known metadata error. After the deadline, explicit refresh can bypass the remaining ordinary five-minute error cache. These are repository/network-scoped transient records, not global IP-quota tracking; early eviction of all recorded state and unrelated applications/networks sharing an egress IP are outside that coordination. Cache schema v1 entries are ignored and expire on their existing schedules.
+
+All failure scenarios are tested with mocked responses; tests do not deliberately exhaust GitHub limits or require a new managed-plugin version. Error-state presentation and final integration remain separate tasks.
+
 ## Development checks
 
 Run from the plugin directory:
@@ -122,9 +213,32 @@ php tests/update-uri.php
 php tests/registry.php
 php tests/registry-lock.php
 php tests/admin.php
+php tests/api-client.php
+php tests/api-resilience.php
+php tests/api-response-matrix.php
+php tests/release-selection.php
+php tests/check-state.php
+php tests/stable-releases.php
+php tests/release-tag.php
+php tests/version-comparison.php
+php tests/release-asset.php
+php tests/cached-releases.php
 php tests/unsupported-environment.php wordpress
 git diff --check
 ```
+
+The offline API matrix runs real components together with deterministic HTTP, transient, clock and database doubles. It sends no network requests and does not boot WordPress:
+
+| Boundary | Coverage |
+| --- | --- |
+| HTTP transport and response parsing | `api-client.php`, `api-resilience.php`: fixed endpoints, request bounds, JSON/media/root/size errors, status and retry-hint handling |
+| Complete release retrieval | `stable-releases.php`: flags, dates, IDs, short pages, duplicates, ordering and scan limit |
+| Cache and coordination | `cached-releases.php`: success/error lifetimes, bypass/invalidation, cooldown preservation, corruption, lock failures and scope isolation |
+| Downstream metadata gates | `release-tag.php`, `version-comparison.php`, `release-asset.php`, `update-uri.php`: version/header/ZIP identity validation |
+| Safe presentation | `check-state.php`: known/unknown errors, fixed guidance, retry hints and explicit healthy outcomes |
+| Cross-component regressions | `api-response-matrix.php`: 44 staged failures through retrieval/cache/presentation, identity and pagination failures, warm-cache downstream rejection, forced-refresh failure and recovery |
+
+The response matrix invokes downstream validators directly; `release-selection.php` separately exercises the production selector and composed checker through real retrieval/cache logic with offline doubles. Neither test establishes ZIP safety or installability.
 
 The foundation checks use WordPress function doubles and separate PHP processes to exercise loading, activation guards and notices. They do not establish real WordPress activation or old-PHP runtime compatibility. Use WordPress Coding Standards when development tooling is available; no standards runner is bundled yet.
 
@@ -145,6 +259,20 @@ In disposable WordPress environments, verify:
 4. Confirm the admin screen performs no GitHub requests or update/install actions, and that plugin initialization and a read-only page view do not create registry records. Test admin registration/removal separately with fixture cleanup.
 
 Later logic tests will cover repository normalization, versions, releases, registry validation and package identity with mocked HTTP. Installation, replacement, rollback and self-updates require disposable single-site and Multisite integration environments. Never test destructive update behavior on production.
+
+## Metadata-only release selection
+
+`GitHub\\Release_Check::get($registration, $force = false)` composes exact installed-plugin discovery, current Update URI and Version checks, cached complete retrieval and `Release_Selector`. Consumers explicitly require these classes and their concrete dependencies. Supply a current registration from a ready registry; a structural `Registration` alone does not establish registry readiness. Installed headers are read through `Installed_Plugins` on each call, outside the repository cache. No check is hooked to WordPress or the admin screen yet.
+
+The selector revalidates a completed candidate list and chooses the highest supported numeric version newer than the installed version, regardless of publication date. Unsupported stable tags fail the check. Multiple releases representing the highest newer numeric version (including `v1.2` and `1.2.0`) fail as ambiguous; lower-version ties do not affect a unique higher choice. It validates the highest release's exact ZIP metadata and returns its error if invalid or missing, without falling back to another release or source archive. Older assets do not affect a valid highest choice.
+
+Results are an immutable `Release_Candidate` (identity, original tag, normalized version and `Release_Asset` metadata pointer), an explicit healthy `Check_State` for no stable releases/no newer version, or `WP_Error`. Failures never become an up-to-date result. Candidates are not installable updates: archive contents, plugin identity, compatibility and replacement conflicts still require validation before native update integration. Future action handlers must enforce capabilities/nonces and recheck registry and installed prerequisites before replacing code. Force retains backend cooldown rules; selection results themselves are not cached.
+
+## Check outcome presentation
+
+`GitHub\\Check_State` is an explicitly loaded, unhooked presentation adapter. `from_error($error)` maps known GitHub, header, version, asset and cache errors to fixed translated titles, descriptions and next steps. Unknown errors receive a conservative fallback; remote messages, arbitrary data and package URLs are excluded. Keep the original `WP_Error` for diagnostics and escape view text when rendering.
+
+Cooldown states retain bounded retry deadlines. `retry_suggested_now()` is only a display hint: backend cooldowns, capabilities and nonces still govern requests. No retry is scheduled. `no_releases()` is reserved for a completed validated empty scan; `no_update()` requires a completed successful comparison. Failed checks never become either successful outcome. This adapter does not retrieve releases, establish package eligibility or add administration controls.
 
 ## Release and trust boundaries
 
