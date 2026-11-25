@@ -215,6 +215,7 @@ php tests/registry-lock.php
 php tests/admin.php
 php tests/api-client.php
 php tests/api-resilience.php
+php tests/api-response-matrix.php
 php tests/check-state.php
 php tests/stable-releases.php
 php tests/release-tag.php
@@ -224,6 +225,19 @@ php tests/cached-releases.php
 php tests/unsupported-environment.php wordpress
 git diff --check
 ```
+
+The offline API matrix runs real components together with deterministic HTTP, transient, clock and database doubles. It sends no network requests and does not boot WordPress:
+
+| Boundary | Coverage |
+| --- | --- |
+| HTTP transport and response parsing | `api-client.php`, `api-resilience.php`: fixed endpoints, request bounds, JSON/media/root/size errors, status and retry-hint handling |
+| Complete release retrieval | `stable-releases.php`: flags, dates, IDs, short pages, duplicates, ordering and scan limit |
+| Cache and coordination | `cached-releases.php`: success/error lifetimes, bypass/invalidation, cooldown preservation, corruption, lock failures and scope isolation |
+| Downstream metadata gates | `release-tag.php`, `version-comparison.php`, `release-asset.php`, `update-uri.php`: version/header/ZIP identity validation |
+| Safe presentation | `check-state.php`: known/unknown errors, fixed guidance, retry hints and explicit healthy outcomes |
+| Cross-component regressions | `api-response-matrix.php`: 44 staged failures through retrieval/cache/presentation, identity and pagination failures, warm-cache downstream rejection, forced-refresh failure and recovery |
+
+The cross-component test invokes each downstream validator directly. It does not implement or prove a production release selector. Publication ordering differs from numeric version ordering; choosing a newer release across candidates remains an open M3 acceptance item. Metadata identification also does not prove ZIP safety or installability.
 
 The foundation checks use WordPress function doubles and separate PHP processes to exercise loading, activation guards and notices. They do not establish real WordPress activation or old-PHP runtime compatibility. Use WordPress Coding Standards when development tooling is available; no standards runner is bundled yet.
 
