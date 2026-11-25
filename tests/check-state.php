@@ -24,7 +24,7 @@ namespace {
 		'cooldown' => 'api_rate_limited',
 		'busy' => 'release_refresh_busy',
 		'incomplete' => 'release_scan_changed release_scan_incomplete',
-		'blocked' => 'invalid_repository_url repository_not_public repository_identity_mismatch api_not_found api_access_denied api_resource_gone api_redirect_refused api_http_error missing_update_uri disabled_update_uri invalid_update_uri update_uri_mismatch update_uri_hostname_mismatch unsupported_release_tag unsupported_installed_version release_asset_missing release_asset_ambiguous api_invalid_response api_response_too_large invalid_release_metadata invalid_asset_metadata release_asset_url_mismatch release_cache_clear_failed release_cache_lock_unavailable release_cache_lock_release_failed release_cooldown_write_failed invalid_api_pagination',
+		'blocked' => 'release_version_ambiguous plugin_not_installed unsupported_plugin_basename invalid_repository_url repository_not_public repository_identity_mismatch api_not_found api_access_denied api_resource_gone api_redirect_refused api_http_error missing_update_uri disabled_update_uri invalid_update_uri update_uri_mismatch update_uri_hostname_mismatch unsupported_release_tag unsupported_installed_version release_asset_missing release_asset_ambiguous api_invalid_response api_response_too_large invalid_release_metadata invalid_asset_metadata release_asset_url_mismatch release_cache_clear_failed release_cache_lock_unavailable release_cache_lock_release_failed release_cooldown_write_failed invalid_api_pagination',
 	);
 	$count = 0;
 	foreach ( $groups as $status => $suffixes ) {

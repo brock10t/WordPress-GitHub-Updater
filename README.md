@@ -1,6 +1,6 @@
 # 10T GitHub Updater
 
-A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current administration screen supports explicit registration and removal. Internal components provide bounded REST retrieval, stable release candidates, version comparison, asset identification and network-aware metadata caching. Integrated update selection, installation and updates remain for later tasks.
+A standalone WordPress plugin for centralized management of plugins hosted in public GitHub repositories. The current administration screen supports explicit registration and removal. Internal components provide bounded REST retrieval, stable release candidates, version comparison, asset identification and network-aware metadata caching. Metadata-only newer-release selection is available internally. Native update offers, package validation and installation remain for later tasks.
 
 Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation is required. There are no mandatory third-party dependencies and production does not require Composer.
 
@@ -216,6 +216,7 @@ php tests/admin.php
 php tests/api-client.php
 php tests/api-resilience.php
 php tests/api-response-matrix.php
+php tests/release-selection.php
 php tests/check-state.php
 php tests/stable-releases.php
 php tests/release-tag.php
@@ -237,7 +238,7 @@ The offline API matrix runs real components together with deterministic HTTP, tr
 | Safe presentation | `check-state.php`: known/unknown errors, fixed guidance, retry hints and explicit healthy outcomes |
 | Cross-component regressions | `api-response-matrix.php`: 44 staged failures through retrieval/cache/presentation, identity and pagination failures, warm-cache downstream rejection, forced-refresh failure and recovery |
 
-The cross-component test invokes each downstream validator directly. It does not implement or prove a production release selector. Publication ordering differs from numeric version ordering; choosing a newer release across candidates remains an open M3 acceptance item. Metadata identification also does not prove ZIP safety or installability.
+The response matrix invokes downstream validators directly; `release-selection.php` separately exercises the production selector and composed checker through real retrieval/cache logic with offline doubles. Neither test establishes ZIP safety or installability.
 
 The foundation checks use WordPress function doubles and separate PHP processes to exercise loading, activation guards and notices. They do not establish real WordPress activation or old-PHP runtime compatibility. Use WordPress Coding Standards when development tooling is available; no standards runner is bundled yet.
 
@@ -258,6 +259,14 @@ In disposable WordPress environments, verify:
 4. Confirm the admin screen performs no GitHub requests or update/install actions, and that plugin initialization and a read-only page view do not create registry records. Test admin registration/removal separately with fixture cleanup.
 
 Later logic tests will cover repository normalization, versions, releases, registry validation and package identity with mocked HTTP. Installation, replacement, rollback and self-updates require disposable single-site and Multisite integration environments. Never test destructive update behavior on production.
+
+## Metadata-only release selection
+
+`GitHub\\Release_Check::get($registration, $force = false)` composes exact installed-plugin discovery, current Update URI and Version checks, cached complete retrieval and `Release_Selector`. Consumers explicitly require these classes and their concrete dependencies. Supply a current registration from a ready registry; a structural `Registration` alone does not establish registry readiness. Installed headers are read through `Installed_Plugins` on each call, outside the repository cache. No check is hooked to WordPress or the admin screen yet.
+
+The selector revalidates a completed candidate list and chooses the highest supported numeric version newer than the installed version, regardless of publication date. Unsupported stable tags fail the check. Multiple releases representing the highest newer numeric version (including `v1.2` and `1.2.0`) fail as ambiguous; lower-version ties do not affect a unique higher choice. It validates the highest release's exact ZIP metadata and returns its error if invalid or missing, without falling back to another release or source archive. Older assets do not affect a valid highest choice.
+
+Results are an immutable `Release_Candidate` (identity, original tag, normalized version and `Release_Asset` metadata pointer), an explicit healthy `Check_State` for no stable releases/no newer version, or `WP_Error`. Failures never become an up-to-date result. Candidates are not installable updates: archive contents, plugin identity, compatibility and replacement conflicts still require validation before native update integration. Future action handlers must enforce capabilities/nonces and recheck registry and installed prerequisites before replacing code. Force retains backend cooldown rules; selection results themselves are not cached.
 
 ## Check outcome presentation
 

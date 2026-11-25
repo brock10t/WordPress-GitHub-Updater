@@ -68,6 +68,9 @@ final readonly class Check_State {
 			'github_updater_invalid_update_uri'                => array( 'header', __( 'Unsupported Update URI', 'wordpress-github-updater' ) ),
 			'github_updater_update_uri_mismatch'               => array( 'header', __( 'Update URI repository conflict', 'wordpress-github-updater' ) ),
 			'github_updater_update_uri_hostname_mismatch'      => array( 'header', __( 'Update URI routing mismatch', 'wordpress-github-updater' ) ),
+			'github_updater_release_version_ambiguous'          => array( 'version', __( 'Ambiguous newer release version', 'wordpress-github-updater' ) ),
+			'github_updater_plugin_not_installed'               => array( 'installed', __( 'Registered plugin is not installed', 'wordpress-github-updater' ) ),
+			'github_updater_unsupported_plugin_basename'         => array( 'installed', __( 'Unsupported installed plugin identity', 'wordpress-github-updater' ) ),
 			'github_updater_unsupported_release_tag'           => array( 'version', __( 'Unsupported release tag', 'wordpress-github-updater' ) ),
 			'github_updater_unsupported_installed_version'     => array( 'version', __( 'Unsupported installed version', 'wordpress-github-updater' ) ),
 			'github_updater_release_asset_missing'             => array( 'asset', __( 'Required plugin ZIP missing', 'wordpress-github-updater' ) ),
@@ -117,6 +120,7 @@ final readonly class Check_State {
 			'metadata' => __( 'Review the release metadata with the publisher. No package can be offered from malformed or mismatched metadata.', 'wordpress-github-updater' ),
 			'incomplete' => __( 'The release scan did not complete consistently. Check again later; repositories beyond the supported scan bound need review.', 'wordpress-github-updater' ),
 			'storage' => __( 'Ask the site administrator to review cache storage and database locking. Refresh the status before retrying; a prior cache change may have completed.', 'wordpress-github-updater' ),
+			'installed' => __( 'Refresh the installed plugin list and review the exact registered basename. Plugins must use their own directory; no files will be moved automatically.', 'wordpress-github-updater' ),
 			'configuration' => __( 'Ask the site administrator to review the updater request configuration.', 'wordpress-github-updater' ),
 			default => __( 'The check failed unexpectedly. Review diagnostics with the site administrator before taking an update action.', 'wordpress-github-updater' ),
 		};
