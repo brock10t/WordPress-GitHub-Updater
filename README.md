@@ -219,6 +219,7 @@ php tests/api-response-matrix.php
 php tests/release-selection.php
 php tests/archive-manifest.php
 php tests/zip-inspector.php
+php tests/asset-downloader.php
 php tests/check-state.php
 php tests/stable-releases.php
 php tests/release-tag.php
@@ -291,6 +292,16 @@ The policy requires only the exact registered root directory and a nonempty file
 | Declared per-entry expansion ratio | 100:1 |
 
 Passing this policy returns `true`; failures return fixed `WP_Error` diagnostics without reflecting entry paths. A pass is not package approval. ZIP inspection adds record consistency and an actual local archive size cap. Bounded download/decompression and actual expanded-byte limits, headers/version/repository identity, compatibility and destination conflicts remain mandatory. Nothing invokes this component from update hooks or the administration screen yet.
+
+## Bounded asset downloading
+
+`Packages\Asset_Downloader::with_file($asset, $consume)` downloads a validated `Release_Asset`, passes its local temporary path to a synchronous callback, and attempts deletion in `finally` on success, error or exception. A normal cleanup failure returns `WP_Error`; callback exceptions propagate after the deletion attempt. The callback must consume the same bytes, validate them and return its result, never retain the path as approval. Consumers explicitly load the downloader and its dependencies. There is no update/admin hook or persistent download cache.
+
+The first request uses the exact selected API asset endpoint with `Accept: application/octet-stream` and the pinned API version. WordPress safe HTTP streams each response to a 0600 temporary file with TLS verification, no credentials/cookies, no automatic redirects and no content decompression. Redirect bodies are cleared before the next request. Only the exact selected browser asset URL and literal release-storage hosts `release-assets.githubusercontent.com` and `objects.githubusercontent.com` with supported `github-production-release-asset` paths are accepted. Relative URLs, repository moves, other hosts, credentials, ports, fragments, encoded paths and loops fail closed. After the first storage redirect, that raw host/path is pinned; signed query parameters may vary and are never returned in diagnostics. This deliberately trusts a GitHub-issued storage location, not arbitrary URLs or wildcard subdomains.
+
+Limits: selected size at most 50 MiB, at most three manually validated redirects (four requests), 20 seconds per request and a 60-second monotonic total budget. Each response has a selected-size-plus-one overflow cap; consequently the chain has at most four bounded responses, not a 50 MiB aggregate bandwidth guarantee. Final status must be 200 with identity/no Content-Encoding, consistent Content-Length when present and an actual streamed byte count exactly matching selected metadata. Partial responses, stale sizes and transport failures are rejected with fixed messages; there are no retries. MIME type and Content-Disposition do not establish safety or rename the temporary file.
+
+This is a download stage only. ZIP inspection, payload/CRC/expanded-byte checks, plugin identity/version/runtime compatibility and replacement conflicts must still pass. Future callers enforce registry readiness, installed-state checks, capabilities and nonces. The downloader's callback lifetime keeps cleanup ownership explicit while the remaining gates are developed. HTTP streaming/size options were reviewed against [WordPress 6.6 HTTP source](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-includes/class-wp-http.php); direct/redirected binary API behavior is documented in [GitHub's release asset API](https://docs.github.com/en/rest/releases/assets?apiVersion=2022-11-28#get-a-release-asset).
 
 ## ZIP record inspection
 
