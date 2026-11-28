@@ -31,6 +31,7 @@ function get_site_option( $name, $default ) {
 	return 'network' === $GLOBALS['scenario'] ? array( 'wordpress-github-updater/wordpress-github-updater.php' => 1 ) : $default;
 }
 function add_action( $hook, $callback ) { $GLOBALS['hooks'][ $hook ][] = $callback; }
+function add_filter( $hook, $callback, $priority = 10, $accepted = 1 ) { $GLOBALS['hooks'][ $hook ][] = $callback; }
 function register_activation_hook( $file, $callback ) { $GLOBALS['activation'] = $callback; }
 function wp_die( $message, $title, $args ) { throw new RuntimeException( $message ); }
 function check( $condition, $message ) {
@@ -48,6 +49,7 @@ foreach ( $hooks['plugins_loaded'] ?? array() as $callback ) {
 
 $should_load = ! in_array( $scenario, array( 'site-only', 'old-wordpress', 'unauthorized' ), true );
 check( class_exists( 'TenT\\GitHubUpdater\\Plugin', false ) === $should_load, 'Coordinator loading: ' . $scenario );
+check( isset( $hooks['upgrader_pre_download'] ) === $should_load, 'Upgrade guard loads outside admin: ' . $scenario );
 
 if ( 'versions' === $scenario ) {
 	check( '' !== TenT\GitHubUpdater\Environment::requirements_error( '8.1.99', '6.6' ), 'Reject PHP below minimum' );

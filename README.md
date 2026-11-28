@@ -8,7 +8,7 @@ Requires **PHP 8.2+** and **WordPress 6.6+**. On Multisite, network activation i
 
 - `wordpress-github-updater.php` declares plugin metadata, registers the activation guard and checks requirements before loading the coordinator on `plugins_loaded`.
 - `includes/class-environment.php` checks versions and network activation and provides escaped administrative diagnostics. This file and the bootstrap deliberately avoid modern PHP syntax that would prevent an older runtime from reaching the version check (syntax baseline PHP 5.6).
-- `includes/class-plugin.php` loads the registry/admin components only in administration requests and registers the screen and authenticated action hooks. Front-end requests do not load those components.
+- `includes/class-plugin.php` registers the native upgrade guard in every supported context, then registers the screen and authenticated action hooks for administration requests. The registry models and native upgrade guard load outside administration too, including cron; the registry page remains administration-only. Hook registration itself performs no registry reads or GitHub requests.
 
 Classes use the `TenT\GitHubUpdater` namespace and WordPress-style `class-*.php` filenames. Components load through explicit requires. Future components will separate registry persistence, GitHub requests, native update integration, package validation, administration and installation. No repository requests or database writes occur during foundation initialization.
 
@@ -222,6 +222,7 @@ php tests/zip-inspector.php
 php tests/zip-contents.php
 php tests/packaged-plugin.php
 php tests/replacement-check.php
+php tests/upgrade-guard.php
 php tests/asset-downloader.php
 php tests/check-state.php
 php tests/stable-releases.php
@@ -347,6 +348,14 @@ This preflight requires an initialized native `WP_Filesystem_Direct` connection 
 `Plugin_Headers` now also reads Network and deprecated Site Wide Only, rejecting duplicate declarations. Its network-only decision follows native fallback and true-string semantics. On Multisite, any network-only requirement change in either direction fails, including for an inactive plugin. This avoids assuming the current site's activation list represents all blogs. On single-site the Network header has no native activation restriction. No plugin is activated, deactivated or moved, and registry/activation/auto-update options are never written. The updater must retain native activation/auto-update choices during the eventual replacement.
 
 A successful read-only preflight is not a lock or permission grant. Filesystem and registration state can change afterward. Future upgrader coordination must run these gates again immediately before replacement, protect the validated ZIP/destination and enforce capabilities/nonces where appropriate. The checks remain unhooked; real manual, automatic, bulk and Multisite replacement tests remain pending. Native Network semantics and discovery refresh were checked against [WordPress 6.6 plugin administration source](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-admin/includes/plugin.php).
+
+## Native upgrade boundary (handoff pending)
+
+`Updates\Upgrade_Guard` now hooks `upgrader_pre_download`, `upgrader_pre_install` and `upgrader_source_selection` in supported admin, cron and CLI contexts. It deliberately denies native upgrades of registered plugins with a fixed diagnostic until coordinated validated handoff is implemented. This includes basename case aliases and other plugin entry points sharing a managed directory. A previous download/source shortcut does not approve a managed package; existing errors are preserved. A plugin update missing a usable basename fails closed when managed records exist, and malformed registry storage is never treated as an empty registry.
+
+The download guard stops normal managed manual/automatic/bulk update paths before core downloads or extracts their package. The early pre-install guard runs before core's error-respecting deactivation/maintenance handlers. The source guard also rejects normal plugin installation sources whose selected root matches a managed directory, before native backup/deletion/copy; upload/install extraction has already happened at that point and remains M5 work. This is not a sandbox for arbitrary custom upgrader destinations or PHP code. Unregistered plugins, themes, core and translation updates preserve their incoming results with valid registry state. The guard changes no activation, auto-update or registry options and performs no GitHub requests.
+
+**Registered plugins currently cannot be updated through native updater paths.** No successful package handoff, lifecycle lock or installable update offer is implemented yet. Existing read-only validators must be composed under coordination through download, extraction and pre-replacement checks before the denial can be replaced by an approval. In particular, `upgrader_clear_destination` runs after clearing and cannot serve as a before-deletion gate. Hook timing and error propagation were reviewed against [WordPress 6.6 WP_Upgrader](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-admin/includes/class-wp-upgrader.php) and [Plugin_Upgrader](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-admin/includes/class-plugin-upgrader.php).
 
 ## Release and trust boundaries
 

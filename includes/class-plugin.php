@@ -21,10 +21,6 @@ final class Plugin {
 	 * @return void
 	 */
 	public function register_hooks(): void {
-		if ( ! is_admin() ) {
-			return;
-		}
-
 		foreach ( array(
 			'github/class-repository.php',
 			'registry/class-registration.php',
@@ -33,11 +29,18 @@ final class Plugin {
 			'registry/class-update-uri.php',
 			'registry/class-registry-lock.php',
 			'registry/class-registry.php',
-			'admin/class-registry-page.php',
+			'updates/class-upgrade-guard.php',
 		) as $file ) {
 			require_once __DIR__ . '/' . $file;
 		}
 
+		$guard = new Updates\Upgrade_Guard();
+		$guard->register_hooks();
+
+		if ( ! is_admin() ) {
+			return;
+		}
+		require_once __DIR__ . '/admin/class-registry-page.php';
 		$page = new Admin\Registry_Page();
 		$page->register_hooks();
 	}
