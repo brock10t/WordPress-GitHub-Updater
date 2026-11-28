@@ -6,6 +6,7 @@ use TenT\GitHubUpdater\GitHub\Release_Candidate;
 use TenT\GitHubUpdater\GitHub\Release_Check;
 use TenT\GitHubUpdater\Packages\Asset_Downloader;
 use TenT\GitHubUpdater\Packages\Replacement_Check;
+use TenT\GitHubUpdater\Packages\Staged_Files;
 use TenT\GitHubUpdater\Registry\Registration;
 use TenT\GitHubUpdater\Registry\Registry;
 use TenT\GitHubUpdater\Registry\Registry_Lock;
@@ -23,13 +24,14 @@ final class Validated_Handoff {
 		private readonly Upgrade_Lock $upgrade_lock = new Upgrade_Lock(),
 		private readonly Release_Check $releases = new Release_Check(),
 		private readonly Asset_Downloader $downloader = new Asset_Downloader(),
-		private readonly Replacement_Check $replacement = new Replacement_Check()
+		private readonly Replacement_Check $replacement = new Replacement_Check(),
+		private readonly Staged_Files $staged = new Staged_Files()
 	) {}
 
 	/**
 	 * Hold physical-tree and registry scopes throughout fresh selection, bounded
 	 * download, package checks and synchronous consumer. Consumer receives path
-	 * and a zero-argument recheck closure, invalid after return; invoke immediately
+	 * and a recheck closure (optional extracted working root), invalid after return; invoke immediately
 	 * before staged/native mutation. This API does NOT bypass Upgrade_Guard.
 	 * Caller owns capabilities/nonces and eventual native rollback coordination.
 	 *
@@ -69,12 +71,15 @@ final class Validated_Handoff {
 					return $this->error( 'lock' );
 				}
 				$active = true;
-				$recheck = function () use ( &$active, $path, $hash, $current, $fresh ) {
+				$recheck = function ( ?string $working = null ) use ( &$active, $path, $hash, $current, $fresh ) {
 					clearstatcache( true, $path );
 					if ( ! $active || ! $this->owned() || is_link( $path ) || ! is_file( $path ) || filesize( $path ) !== $fresh->asset->size || hash_file( 'sha256', $path ) !== $hash ) {
 						return $this->error( 'changed' );
 					}
 					$result = $this->replacement->check( $path, $current, $fresh->tag_name );
+					if ( ! $result instanceof WP_Error && null !== $working ) {
+						$result = $this->staged->check( $path, $working, $current );
+					}
 					return $this->owned() ? $result : $this->error( 'lock' );
 				};
 				try {

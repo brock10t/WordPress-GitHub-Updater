@@ -5,7 +5,7 @@ use TenT\GitHubUpdater\GitHub\Release_Selector;
 use TenT\GitHubUpdater\Registry\Registry;
 use TenT\GitHubUpdater\Updates\Validated_Handoff;
 require __DIR__ . '/support/replacement-environment.php';
-foreach ( array( 'github/class-api-client.php', 'github/class-stable-releases.php', 'github/class-cached-releases.php', 'github/class-release-asset.php', 'github/class-release-candidate.php', 'github/class-release-selector.php', 'github/class-check-state.php', 'github/class-release-check.php', 'packages/class-asset-downloader.php', 'updates/class-upgrade-lock.php', 'updates/class-validated-handoff.php' ) as $file ) { require dirname( __DIR__ ) . '/includes/' . $file; }
+foreach ( array( 'github/class-api-client.php', 'github/class-stable-releases.php', 'github/class-cached-releases.php', 'github/class-release-asset.php', 'github/class-release-candidate.php', 'github/class-release-selector.php', 'github/class-check-state.php', 'github/class-release-check.php', 'packages/class-asset-downloader.php', 'packages/class-staged-files.php', 'updates/class-upgrade-lock.php', 'updates/class-validated-handoff.php' ) as $file ) { require dirname( __DIR__ ) . '/includes/' . $file; }
 class Handoff_DB extends Lock_Database_Double {
 	public array $held = array();
 	public bool $single_lock_only = false;
@@ -49,6 +49,13 @@ try {
 		$path_seen = $path; $late_recheck = $recheck;
 		assert_zip( is_file($path) && count($GLOBALS['wpdb']->held)===2, 'Both scopes and ZIP exist inside consumer' );
 		assert_zip( is_array($recheck()), 'Recheck validates same protected bytes and current destination' );
+		$stage = sys_get_temp_dir() . '/10t-handoff-stage-' . bin2hex(random_bytes(6)); mkdir($stage); mkdir($stage.'/fixture'); file_put_contents($stage.'/fixture/main.php',$GLOBALS['source']);
+		try {
+			assert_zip( true === $recheck($stage), 'Scoped recheck also verifies extracted working tree' );
+			file_put_contents($stage.'/fixture/main.php','tampered');
+			assert_zip( $recheck($stage) instanceof WP_Error, 'Scoped stage tampering rejected' );
+		} finally { unlink($stage.'/fixture/main.php'); rmdir($stage.'/fixture'); rmdir($stage); }
+
 		$denied = (new Registry())->remove($record->plugin_basename);
 		assert_zip( $denied instanceof WP_Error && 'github_updater_registry_busy' === $denied->code, 'Registry mutation cannot nest during handoff' );
 		return 'consumed';

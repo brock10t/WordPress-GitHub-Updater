@@ -45,32 +45,46 @@ final class Zip_Contents {
 		return $this->validate( $path, $registration, true );
 	}
 
+	/**
+	 * Hash each validated payload without buffering it or exposing its contents.
+	 * @param string $path Protected ZIP. @param Registration $registration Identity.
+	 * @return array<string, array{type:string,size:int,sha256:string}>|WP_Error
+	 */
+	public function fingerprints( string $path, Registration $registration ): array|WP_Error {
+		return $this->validate( $path, $registration, false, true );
+	}
+
 	/** @return true|array<string, string>|WP_Error */
-	private function validate( string $path, Registration $registration, bool $capture ): true|array|WP_Error {
+	private function validate( string $path, Registration $registration, bool $capture, bool $fingerprints = false ): true|array|WP_Error {
 		$deadline = hrtime( true ) / 1000000000 + self::MAX_SECONDS;
-		return $this->inspector->with_entries( $path, $registration, function ( $stream, array $entries ) use ( $deadline, $capture ) {
+		return $this->inspector->with_entries( $path, $registration, function ( $stream, array $entries ) use ( $deadline, $capture, $fingerprints ) {
 			$total    = 0;
 			$prefixes = array();
+			$digests  = array();
 			foreach ( $entries as $entry ) {
 				$collect = $capture && 'file' === $entry['type'] && 1 === substr_count( $entry['name'], '/' ) && str_ends_with( $entry['name'], '.php' );
 				if ( $collect && count( $prefixes ) >= self::MAX_PHP_PREFIXES ) {
 					return $this->error( 'prefix_limit', __( 'The package has too many top-level PHP files for bounded header inspection.', 'wordpress-github-updater' ) );
 				}
 				$prefix = $collect ? '' : null;
-				$result = $this->entry( $stream, $entry, $total, $deadline, $prefix );
+				$digest = $fingerprints ? '' : null;
+				$result = $this->entry( $stream, $entry, $total, $deadline, $prefix, $digest );
 				if ( $result instanceof WP_Error ) {
 					return $result;
+				}
+				if ( $fingerprints ) {
+					$digests[ $entry['name'] ] = array( 'type' => $entry['type'], 'size' => $entry['size'], 'sha256' => $digest );
 				}
 				if ( $collect ) {
 					$prefixes[ $entry['name'] ] = $prefix;
 				}
 			}
-			return $capture ? $prefixes : true;
+			return $fingerprints ? $digests : ( $capture ? $prefixes : true );
 		} );
 	}
 
 	/** @param resource $stream Inspected read-only stream. @return true|WP_Error */
-	private function entry( $stream, array $entry, int &$total, float $deadline, ?string &$prefix ): true|WP_Error {
+	private function entry( $stream, array $entry, int &$total, float $deadline, ?string &$prefix, ?string &$digest ): true|WP_Error {
 		$deflated = 8 === $entry['method'];
 		if ( $deflated && ( ! function_exists( 'inflate_init' ) || ! function_exists( 'inflate_add' ) || ! function_exists( 'inflate_get_status' ) || ! function_exists( 'inflate_get_read_len' ) ) ) {
 			return $this->error( 'unsupported', __( 'This PHP runtime cannot safely validate deflated ZIP contents. The zlib streaming functions are required.', 'wordpress-github-updater' ) );
@@ -83,6 +97,7 @@ final class Zip_Contents {
 			return $this->invalid();
 		}
 		$crc       = hash_init( 'crc32b' );
+		$sha       = null !== $digest ? hash_init( 'sha256' ) : null;
 		$remaining = $entry['compressed_size'];
 		$expanded  = 0;
 		$ended     = false;
@@ -126,6 +141,9 @@ final class Zip_Contents {
 				$prefix .= substr( $output, 0, self::PREFIX_BYTES - strlen( $prefix ) );
 			}
 			hash_update( $crc, $output );
+			if ( null !== $sha ) {
+				hash_update( $sha, $output );
+			}
 			unset( $output, $chunk );
 		}
 		if ( hrtime( true ) / 1000000000 > $deadline ) {
@@ -139,6 +157,9 @@ final class Zip_Contents {
 		}
 		if ( hash_final( $crc ) !== $entry['crc32'] ) {
 			return $this->error( 'crc', __( 'The ZIP contents failed their CRC integrity check.', 'wordpress-github-updater' ) );
+		}
+		if ( null !== $sha ) {
+			$digest = hash_final( $sha );
 		}
 		return true;
 	}
