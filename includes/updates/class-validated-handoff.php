@@ -83,7 +83,8 @@ final class Validated_Handoff {
 					return $this->owned() ? $result : $this->error( 'lock' );
 				};
 				try {
-					$result = $consume( $path, $recheck );
+					$ownership = function () use ( &$active ): bool { return $active && $this->owned(); };
+					$result = $consume( $path, $recheck, $ownership );
 					return $this->owned() ? $result : $this->error( 'lock' );
 				} finally {
 					$active = false;

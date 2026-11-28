@@ -1,5 +1,5 @@
 <?php
-/** Fail-closed native upgrader boundary before coordinated handoff exists. @package TenTGitHubUpdater */
+/** Fail-closed native upgrader boundary with scoped session exceptions. @package TenTGitHubUpdater */
 namespace TenT\GitHubUpdater\Updates;
 
 use TenT\GitHubUpdater\Registry\Registry;
@@ -9,7 +9,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-/** Never approves a package; future coordinated validation replaces this denial. */
+/** Denies ordinary managed upgrades; permits only an active bound native session. */
 final class Upgrade_Guard {
 	/** @param Registry $registry Read-only current managed identities. */
 	public function __construct( private readonly Registry $registry = new Registry() ) {}
@@ -21,13 +21,19 @@ final class Upgrade_Guard {
 		add_filter( 'upgrader_source_selection', array( $this, 'source_selection' ), PHP_INT_MAX, 4 );
 	}
 
-	/** @return mixed Existing errors/unrelated values preserved; managed download denied. */
+	/** @return mixed Existing errors/unrelated values preserved; managed download denied outside a bound session. */
 	public function pre_download( mixed $reply, mixed $package, mixed $upgrader, mixed $extra ): mixed {
+		if ( ! $reply instanceof WP_Error && null !== ( $session = $this->session( $extra ) ) ) {
+			return $session->download( $reply, $package, $upgrader, $extra );
+		}
 		return $reply instanceof WP_Error ? $reply : $this->guard( $reply, $extra );
 	}
 
 	/** @return mixed Runs before native deactivation/maintenance pre-install handlers. */
 	public function pre_install( mixed $response, mixed $extra ): mixed {
+		if ( ! $response instanceof WP_Error && null !== ( $session = $this->session( $extra ) ) ) {
+			return $session->pre_install( $response, $extra );
+		}
 		return $response instanceof WP_Error ? $response : $this->guard( $response, $extra );
 	}
 
@@ -41,6 +47,9 @@ final class Upgrade_Guard {
 	public function source_selection( mixed $source, mixed $remote, mixed $upgrader, mixed $extra ): mixed {
 		if ( $source instanceof WP_Error ) {
 			return $source;
+		}
+		if ( null !== ( $session = $this->session( $extra ) ) ) {
+			return $session->source( $source, $remote, $upgrader, $extra );
 		}
 		$result = $this->guard( $source, $extra );
 		if ( $result instanceof WP_Error || ! is_array( $extra ) || 'plugin' !== ( $extra['type'] ?? null ) ) {
@@ -60,6 +69,14 @@ final class Upgrade_Guard {
 			}
 		}
 		return $source;
+	}
+
+	private function session( mixed $extra ): ?Native_Session {
+		if ( ! class_exists( Native_Session::class, false ) ) {
+			return null;
+		}
+		$session = Native_Session::current();
+		return null !== $session && $session->matches( $extra ) ? $session : null;
 	}
 
 	/** @return mixed No registry query for clearly unrelated themes/core/languages. */
