@@ -14,6 +14,8 @@ final class Zip_Contents {
 	public const STORED_CHUNK_BYTES  = 65536;
 	public const DEFLATE_CHUNK_BYTES = 256;
 	public const MAX_SECONDS         = 30;
+	public const PREFIX_BYTES        = 8192;
+	public const MAX_PHP_PREFIXES    = 64;
 
 	/** @param Zip_Inspector $inspector Raw record and manifest gate. */
 	public function __construct( private readonly Zip_Inspector $inspector = new Zip_Inspector() ) {}
@@ -28,21 +30,47 @@ final class Zip_Contents {
 	 * @return true|WP_Error Integrity/resource check only, not installability.
 	 */
 	public function check( string $path, Registration $registration ): true|WP_Error {
+		return $this->validate( $path, $registration, false );
+	}
+
+	/**
+	 * Return bounded root PHP prefixes only AFTER every payload passes integrity.
+	 * Hidden files are included conservatively; nested library files are not
+	 * native top-level plugin entry points. No full payload is retained.
+	 *
+	 * @param string $path Local protected ZIP. @param Registration $registration Identity.
+	 * @return array<string, string>|WP_Error Raw unescaped prefixes, never executable.
+	 */
+	public function plugin_prefixes( string $path, Registration $registration ): array|WP_Error {
+		return $this->validate( $path, $registration, true );
+	}
+
+	/** @return true|array<string, string>|WP_Error */
+	private function validate( string $path, Registration $registration, bool $capture ): true|array|WP_Error {
 		$deadline = hrtime( true ) / 1000000000 + self::MAX_SECONDS;
-		return $this->inspector->with_entries( $path, $registration, function ( $stream, array $entries ) use ( $deadline ) {
-			$total = 0;
+		return $this->inspector->with_entries( $path, $registration, function ( $stream, array $entries ) use ( $deadline, $capture ) {
+			$total    = 0;
+			$prefixes = array();
 			foreach ( $entries as $entry ) {
-				$result = $this->entry( $stream, $entry, $total, $deadline );
+				$collect = $capture && 'file' === $entry['type'] && 1 === substr_count( $entry['name'], '/' ) && str_ends_with( $entry['name'], '.php' );
+				if ( $collect && count( $prefixes ) >= self::MAX_PHP_PREFIXES ) {
+					return $this->error( 'prefix_limit', __( 'The package has too many top-level PHP files for bounded header inspection.', 'wordpress-github-updater' ) );
+				}
+				$prefix = $collect ? '' : null;
+				$result = $this->entry( $stream, $entry, $total, $deadline, $prefix );
 				if ( $result instanceof WP_Error ) {
 					return $result;
 				}
+				if ( $collect ) {
+					$prefixes[ $entry['name'] ] = $prefix;
+				}
 			}
-			return true;
+			return $capture ? $prefixes : true;
 		} );
 	}
 
 	/** @param resource $stream Inspected read-only stream. @return true|WP_Error */
-	private function entry( $stream, array $entry, int &$total, float $deadline ): true|WP_Error {
+	private function entry( $stream, array $entry, int &$total, float $deadline, ?string &$prefix ): true|WP_Error {
 		$deflated = 8 === $entry['method'];
 		if ( $deflated && ( ! function_exists( 'inflate_init' ) || ! function_exists( 'inflate_add' ) || ! function_exists( 'inflate_get_status' ) || ! function_exists( 'inflate_get_read_len' ) ) ) {
 			return $this->error( 'unsupported', __( 'This PHP runtime cannot safely validate deflated ZIP contents. The zlib streaming functions are required.', 'wordpress-github-updater' ) );
@@ -94,6 +122,9 @@ final class Zip_Contents {
 			}
 			$expanded += $bytes;
 			$total    += $bytes;
+			if ( null !== $prefix && strlen( $prefix ) < self::PREFIX_BYTES ) {
+				$prefix .= substr( $output, 0, self::PREFIX_BYTES - strlen( $prefix ) );
+			}
 			hash_update( $crc, $output );
 			unset( $output, $chunk );
 		}
