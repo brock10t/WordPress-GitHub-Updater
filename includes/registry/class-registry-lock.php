@@ -71,6 +71,15 @@ final class Registry_Lock {
 		return $result;
 	}
 
+	/** Confirm an active registry scope still belongs to this database connection. */
+	public function is_owned(): bool {
+		global $wpdb;
+		$network_id = is_multisite() ? get_current_network_id() : 0;
+		$table      = is_multisite() ? $wpdb->sitemeta : $wpdb->options;
+		$name       = '10t-gu:' . substr( hash( 'sha256', DB_NAME . ':' . $table . ':' . $network_id . ':' . Option_Storage::OPTION_NAME ), 0, 56 );
+		return isset( self::$active[ $name ] ) && '1' === (string) $this->query( $wpdb->prepare( 'SELECT IF(IS_USED_LOCK(%s) = CONNECTION_ID(), 1, 0)', $name ) );
+	}
+
 	/**
 	 * Avoid exposing database errors in administrative output.
 	 *

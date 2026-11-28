@@ -223,6 +223,7 @@ php tests/zip-contents.php
 php tests/packaged-plugin.php
 php tests/replacement-check.php
 php tests/upgrade-guard.php
+php tests/validated-handoff.php
 php tests/asset-downloader.php
 php tests/check-state.php
 php tests/stable-releases.php
@@ -356,6 +357,16 @@ A successful read-only preflight is not a lock or permission grant. Filesystem a
 The download guard stops normal managed manual/automatic/bulk update paths before core downloads or extracts their package. The early pre-install guard runs before core's error-respecting deactivation/maintenance handlers. The source guard also rejects normal plugin installation sources whose selected root matches a managed directory, before native backup/deletion/copy; upload/install extraction has already happened at that point and remains M5 work. This is not a sandbox for arbitrary custom upgrader destinations or PHP code. Unregistered plugins, themes, core and translation updates preserve their incoming results with valid registry state. The guard changes no activation, auto-update or registry options and performs no GitHub requests.
 
 **Registered plugins currently cannot be updated through native updater paths.** No successful package handoff, lifecycle lock or installable update offer is implemented yet. Existing read-only validators must be composed under coordination through download, extraction and pre-replacement checks before the denial can be replaced by an approval. In particular, `upgrader_clear_destination` runs after clearing and cannot serve as a before-deletion gate. Hook timing and error propagation were reviewed against [WordPress 6.6 WP_Upgrader](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-admin/includes/class-wp-upgrader.php) and [Plugin_Upgrader](https://raw.githubusercontent.com/WordPress/WordPress/6.6/wp-admin/includes/class-plugin-upgrader.php).
+
+## Scoped validated handoff (not native approval)
+
+`Updates\Validated_Handoff::run($selected_registration, $expected_candidate, $consume)` keeps the physical-plugin-tree lock, current network/site registry lock and downloaded ZIP alive for one synchronous consumer. It force-refreshes release selection (respecting server cooldowns), requires exact candidate/asset identity, then runs the bounded downloader and replacement/package preflight. The consumer receives the temporary path and a zero-argument recheck closure. The closure checks both database lock owners, the ZIP byte count/SHA-256 and current registry/installed/destination/package state. It expires when the consumer returns or throws. All downloaded files and both lock scopes are released through their owning `finally` blocks.
+
+`Upgrade_Lock` uses a zero-wait advisory lock keyed by the canonical physical plugin root, shared across participating networks on the same database server. The existing `Registry_Lock` still uses its network/site registry key and now exposes a connection-ownership check. Ownership is verified after acquiring both scopes, after fresh selection, before consuming, during rechecks and after consuming. Databases that implicitly release earlier advisory locks when a second is acquired fail closed before HTTP; connection loss/failover or lost ownership also fails. The cache reader's temporary lock must coexist with these locks. This requires one stable primary connection, a shared lock server and cooperative writers; it cannot serialize unrelated core/PHP processes that ignore these locks or deployments using different DB servers for the same files.
+
+The consumer must not retain the path/recheck, return the path to core after the scope ends, or treat callback entry as permission to mutate. Capabilities/nonces and native rollback/activation coordination remain with the eventual caller. **This API is explicitly loaded and does not bypass the native upgrade guard.** Staged-file verification and native hook/session wiring remain next; native managed upgrades still return the validation-pending diagnostic. No update offer, extraction or replacement is enabled by this checkpoint.
+
+`php tests/validated-handoff.php` covers fresh selection, real ZIP/preflight checks with HTTP/DB doubles, nested mutation denial, tampering/installed changes, expired callbacks, legacy single-lock behavior, connection ownership loss, strict candidate identity and cleanup on return/error/exception. Simulated network scopes share the physical lock; this is not real Multisite coverage. Native DB verification used a synthetic package and mocked HTTP, confirmed independent-connection contention for both scopes and checked temporary/cache cleanup plus unchanged plugin/options.
 
 ## Release and trust boundaries
 

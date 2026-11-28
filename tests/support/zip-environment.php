@@ -8,7 +8,10 @@ require dirname( __DIR__, 2 ) . '/includes/registry/class-registration.php';
 require dirname( __DIR__, 2 ) . '/includes/packages/class-archive-manifest.php';
 require dirname( __DIR__, 2 ) . '/includes/packages/class-zip-inspector.php';
 class WP_Error {
-	public function __construct( public string $code, public string $message ) {}
+	public function __construct( public string $code, public string $message, public mixed $data = null ) {}
+	public function get_error_code() { return $this->code; }
+	public function get_error_message() { return $this->message; }
+	public function get_error_data() { return $this->data; }
 }
 function __( $text, $domain ) { return $text; }
 function assert_zip( bool $condition, string $description ): void {
