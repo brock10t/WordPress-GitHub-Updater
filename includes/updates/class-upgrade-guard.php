@@ -12,7 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 /** Denies ordinary managed upgrades; permits only an active bound native session. */
 final class Upgrade_Guard {
 	/** @param Registry $registry Read-only current managed identities. */
-	public function __construct( private readonly Registry $registry = new Registry() ) {}
+	public function __construct( private readonly Registry $registry = new Registry(), private readonly ?Native_Router $router = null ) {}
 
 	/** Register in every supported request context, including cron/CLI. */
 	public function register_hooks(): void {
@@ -26,7 +26,11 @@ final class Upgrade_Guard {
 		if ( ! $reply instanceof WP_Error && null !== ( $session = $this->session( $extra ) ) ) {
 			return $session->download( $reply, $package, $upgrader, $extra );
 		}
-		return $reply instanceof WP_Error ? $reply : $this->guard( $reply, $extra );
+		$guarded = $reply instanceof WP_Error ? $reply : $this->guard( $reply, $extra );
+		if ( $guarded instanceof WP_Error && 'github_updater_upgrade_validation_pending' === $guarded->get_error_code() && null !== $this->router ) {
+			return $this->router->download( $reply, $package, $upgrader, $extra );
+		}
+		return $guarded;
 	}
 
 	/** @return mixed Runs before native deactivation/maintenance pre-install handlers. */
@@ -34,6 +38,7 @@ final class Upgrade_Guard {
 		if ( ! $response instanceof WP_Error && null !== ( $session = $this->session( $extra ) ) ) {
 			return $session->pre_install( $response, $extra );
 		}
+		if ( ! $response instanceof WP_Error && null !== $this->router && $this->router->matches( $extra ) ) { return $this->router->pre_install( $response, $extra ); }
 		return $response instanceof WP_Error ? $response : $this->guard( $response, $extra );
 	}
 
@@ -51,6 +56,7 @@ final class Upgrade_Guard {
 		if ( null !== ( $session = $this->session( $extra ) ) ) {
 			return $session->source( $source, $remote, $upgrader, $extra );
 		}
+		if ( null !== $this->router && $this->router->matches( $extra ) ) { return $this->router->source( $source, $remote, $upgrader, $extra ); }
 		$result = $this->guard( $source, $extra );
 		if ( $result instanceof WP_Error || ! is_array( $extra ) || 'plugin' !== ( $extra['type'] ?? null ) ) {
 			return $result;

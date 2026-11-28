@@ -18,6 +18,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 /** No native approval or reusable path; consumer must finish within this scope. */
 final class Validated_Handoff {
+	private bool $request_scope = false;
+	private bool $item_active = false;
 	public function __construct(
 		private readonly Registry $registry = new Registry(),
 		private readonly Registry_Lock $registry_lock = new Registry_Lock(),
@@ -38,7 +40,28 @@ final class Validated_Handoff {
 	 * @return mixed Consumer result or WP_Error; exceptions propagate after cleanup.
 	 */
 	public function run( Registration $selected, Release_Candidate $expected, callable $consume ): mixed {
-		return $this->upgrade_lock->run( fn() => $this->registry_lock->run( function () use ( $selected, $expected, $consume ) {
+		if ( ! $this->request_scope ) {
+			return $this->in_request( fn() => $this->run( $selected, $expected, $consume ) );
+		}
+		if ( $this->item_active ) { return $this->error( 'busy' ); }
+		$this->item_active = true;
+		try {
+			return $this->prepare( $selected, $expected, $consume );
+		} finally { $this->item_active = false; }
+	}
+
+	/** Retain both scopes across a native request, including core shutdown backups. */
+	public function in_request( callable $consume ): mixed {
+		if ( $this->request_scope ) { return $this->error( 'busy' ); }
+		return $this->upgrade_lock->run( fn() => $this->registry_lock->run( function () use ( $consume ) {
+			$this->request_scope = true;
+			try { return $this->owned() ? $consume() : $this->error( 'lock' ); }
+			finally { $this->request_scope = false; }
+		} ) );
+	}
+	public function owns_scope(): bool { return $this->request_scope && $this->owned(); }
+	private function prepare( Registration $selected, Release_Candidate $expected, callable $consume ): mixed {
+
 			if ( ! $this->owned() ) {
 				return $this->error( 'lock' );
 			}
@@ -90,8 +113,8 @@ final class Validated_Handoff {
 					$active = false;
 				}
 			} );
-		} ) );
 	}
+
 	private function same_selection( Release_Candidate $fresh, Release_Candidate $expected ): bool {
 		$a = get_object_vars( $fresh );
 		$b = get_object_vars( $expected );

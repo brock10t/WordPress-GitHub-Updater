@@ -30,12 +30,15 @@ final class Plugin {
 			'registry/class-registry-lock.php',
 			'registry/class-registry.php',
 			'updates/class-upgrade-guard.php',
+			'updates/class-native-router.php',
 		) as $file ) {
 			require_once __DIR__ . '/' . $file;
 		}
 
-		$guard = new Updates\Upgrade_Guard();
+		$router = new Updates\Native_Router();
+		$guard = new Updates\Upgrade_Guard( router: $router );
 		$guard->register_hooks();
+		$router->register_hooks();
 
 		if ( ! is_admin() ) {
 			return;
