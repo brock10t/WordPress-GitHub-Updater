@@ -31,6 +31,7 @@ final class Plugin {
 			'registry/class-registry.php',
 			'updates/class-upgrade-guard.php',
 			'updates/class-native-router.php',
+			'updates/class-update-metadata.php',
 		) as $file ) {
 			require_once __DIR__ . '/' . $file;
 		}
@@ -39,6 +40,8 @@ final class Plugin {
 		$guard = new Updates\Upgrade_Guard( router: $router );
 		$guard->register_hooks();
 		$router->register_hooks();
+		$metadata = new Updates\Update_Metadata();
+		$metadata->register_hooks();
 
 		if ( ! is_admin() ) {
 			return;

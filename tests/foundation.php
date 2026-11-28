@@ -49,6 +49,7 @@ foreach ( $hooks['plugins_loaded'] ?? array() as $callback ) {
 
 $should_load = ! in_array( $scenario, array( 'site-only', 'old-wordpress', 'unauthorized' ), true );
 check( class_exists( 'TenT\\GitHubUpdater\\Plugin', false ) === $should_load, 'Coordinator loading: ' . $scenario );
+check( isset( $hooks['update_plugins_github.com'] ) === $should_load, 'Metadata hook loads outside admin: ' . $scenario );
 check( isset( $hooks['upgrader_pre_download'] ) === $should_load, 'Upgrade guard loads outside admin: ' . $scenario );
 
 if ( 'versions' === $scenario ) {
