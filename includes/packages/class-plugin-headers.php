@@ -14,7 +14,20 @@ final class Plugin_Headers {
 		'Name' => 'Plugin Name', 'Version' => 'Version', 'UpdateURI' => 'Update URI',
 		'RequiresWP' => 'Requires at least', 'RequiresPHP' => 'Requires PHP',
 		'RequiresPlugins' => 'Requires Plugins',
+		'Network' => 'Network', '_sitewide' => 'Site Wide Only',
 	);
+
+	/** Native get_plugin_data() Network/Site Wide Only fallback semantics. */
+	public static function network_only( array $headers ): bool {
+		$network = $headers['Network'] ?? '';
+		if ( is_bool( $network ) ) {
+			return $network;
+		}
+		if ( ! $network && ! empty( $headers['_sitewide'] ) ) {
+			$network = $headers['_sitewide'];
+		}
+		return is_string( $network ) && 'true' === strtolower( $network );
+	}
 
 	/** @param string $prefix Raw bounded bytes. @return array<string, string>|WP_Error */
 	public static function parse( string $prefix ): array|WP_Error {

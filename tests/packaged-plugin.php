@@ -17,7 +17,7 @@ function is_wp_version_compatible( $required ) {
 }
 function is_php_version_compatible( $required ) { return empty( $required ) || version_compare( $GLOBALS['runtime_php'], $required, '>=' ); }
 function plugin_source( array $changes = array() ): string {
-	$headers = $changes + array( 'Plugin Name' => 'Fixture', 'Version' => '1.2.0', 'Update URI' => 'https://github.com/owner/repository', 'Requires at least' => '6.6', 'Requires PHP' => '8.2', 'Requires Plugins' => '' );
+	$headers = $changes + array( 'Plugin Name' => 'Fixture', 'Version' => '1.2.0', 'Update URI' => 'https://github.com/owner/repository', 'Requires at least' => '6.6', 'Requires PHP' => '8.2', 'Requires Plugins' => '', 'Network' => '', 'Site Wide Only' => '' );
 	$source = "<?php\n/*\n";
 	foreach ( $headers as $name => $value ) { if ( null !== $value ) { $source .= $name . ': ' . $value . "\n"; } }
 	return $source . "*/\nthrow new RuntimeException('PACKAGE_CODE_MUST_NOT_EXECUTE');\n";
@@ -48,7 +48,7 @@ try {
 	foreach ( array( array( 'Plugin Name' => '' ), array( 'Plugin Name' => null ), array( 'Plugin Name' => '0' ) ) as $changes ) { package_error( packaged( plugin_source( $changes ) ), 'github_updater_package_headers' ); }
 	foreach ( array( '', 'unknown', '1.3', 'v1.2-beta' ) as $version ) { package_error( packaged( plugin_source( array( 'Version' => $version ) ) ), 'github_updater_package_version' ); }
 	foreach ( array( '' => 'missing_update_uri', 'false' => 'disabled_update_uri', 'https://github.com/other/repo' => 'update_uri_mismatch', 'https://GITHUB.COM/owner/repository' => 'update_uri_hostname_mismatch', 'http://github.com/owner/repository' => 'invalid_update_uri' ) as $uri => $code ) { package_error( packaged( plugin_source( array( 'Update URI' => $uri ) ) ), 'github_updater_' . $code ); }
-	foreach ( array( 'Plugin Name', 'Version', 'Update URI', 'Requires PHP', 'Requires at least', 'Requires Plugins' ) as $field ) {
+	foreach ( array( 'Plugin Name', 'Version', 'Update URI', 'Requires PHP', 'Requires at least', 'Requires Plugins', 'Network', 'Site Wide Only' ) as $field ) {
 		package_error( packaged( plugin_source() . "\n" . $field . ": duplicated\n" ), 'github_updater_package_headers' );
 	}
 	package_error( packaged( plugin_source( array( 'Plugin Name' => "REMOTE_SECRET\0invalid" ) ) ), 'github_updater_package_headers' );
